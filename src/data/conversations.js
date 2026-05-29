@@ -1,7 +1,7 @@
 export const conversations = [
   {
     id: 1,
-    title: "استعلام مانده حساب",
+    title:"سپرده جاري ريالي (با وثايق)",
     time: "10:30",
     icon: "💳",
     selected: true,

@@ -6,12 +6,6 @@ export const sidebarItems = [
     path: "/history" 
   },
   { 
-    id: 2, 
-    icon: "🏦", 
-    title: "خدمات بانکی", 
-    path: "#" 
-  },
-  { 
     id: 3, 
     icon: "📄", 
     title: "درخواست‌ها", 
