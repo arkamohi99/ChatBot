@@ -4,14 +4,24 @@ import { useState } from 'react';
 import Sidebar from './components/layout/Sidebar';
 import ChatPage from './pages/ChatPage';
 import HistoryPage from './pages/HistoryPage';
+import bgImage from './assets/bg.png';
 
 export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   return (
     <Router>
-      <div className="min-h-screen bg-purple-300 font-vazirmatn" dir="rtl">
-        <div className="min-h-screen p-5">
+      <div 
+        className="min-h-screen font-vazirmatn" 
+        dir="rtl"
+        style={{
+          backgroundImage: `url(${bgImage})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+          backgroundAttachment: 'fixed'
+        }}
+      >        <div className="min-h-screen p-5">
           <div className="max-w-[1420px] mx-auto">
             <div className="flex gap-5 h-[calc(100vh-40px)]">
               <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
