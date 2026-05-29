@@ -1,79 +1,93 @@
+// components/layout/Sidebar.jsx
 import { NavLink, useNavigate } from 'react-router-dom';
 import { sidebarItems } from "../../data/sidebarItems";
+import customLogo from '../../assets/download.png'; // or use public path '/logo.png'
 
 export default function Sidebar({ isOpen, setIsOpen }) {
   const navigate = useNavigate();
 
   return (
-    <aside className={`bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl flex flex-col transition-all duration-300 overflow-hidden
-      ${isOpen ? 'w-80' : 'w-20'}`}>
+    <aside
+      className={`
+        h-full flex flex-col rounded-3xl bg-white/70 backdrop-blur-xl shadow-xl border border-gray-100
+        transition-all duration-300 overflow-hidden
+        ${isOpen ? 'w-80' : 'w-20'}
+      `}
+    >
+      {/* TOP AREA - Dark purple background, white text */}
+      <div className="flex-shrink-0">
+        <div className="p-4 flex items-center gap-3 bg-purple-800">
+          {/* Custom PNG logo */}
+          <img 
+            src={customLogo} 
+            alt="Logo" 
+            className="w-10 h-10 rounded-2xl object-cover shadow-md"
+          />
+          {isOpen && (
+            <div>
+              <div className="font-bold text-base leading-tight text-white">بانک اقتصاد نوین</div>
+              <div className="text-[11px] text-purple-200">EGHTESAD NOVIN BANK</div>
+            </div>
+          )}
+        </div>
 
-      {/* Logo */}
-      <div className="p-6 flex items-center gap-3 border-b border-purple-100">
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-purple-700 to-purple-500 flex-shrink-0" />
         {isOpen && (
-          <div>
-            <div className="font-bold text-lg leading-tight">بانک اقتصاد نوین</div>
-            <div className="text-xs text-gray-500">EGHTESAD NOVIN BANK</div>
+          <div className="flex flex-col items-center py-4 border-b border-gray-100">
+            <div className="w-16 h-16 rounded-full bg-purple-100 flex items-center justify-center text-2xl font-bold text-purple-800 shadow-inner">
+              EN
+            </div>
+            <div className="mt-2 font-semibold text-purple-800 text-sm">امین رضایی</div>
+            <a href="#" className="text-purple-600 text-xs mt-1 hover:text-purple-700 transition">مشاهده پروفایل</a>
           </div>
         )}
       </div>
 
-      {/* User Info */}
-      {isOpen && (
-        <div className="flex flex-col items-center py-8 border-b border-purple-100">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[#2b0f57] to-[#7c56d6] flex items-center justify-center text-4xl font-bold text-white shadow-md">
-            EN
-          </div>
-          <div className="mt-4 font-semibold">امین رضایی</div>
-          <a href="#" className="text-purple-600 text-sm mt-1 hover:underline">مشاهده پروفایل</a>
-        </div>
-      )}
+      {/* SCROLLABLE AREA - dark purple text for nav items */}
+      <div className="flex-1 min-h-0 overflow-y-auto custom-scroll">
+        <nav className="p-3 space-y-1">
+          {sidebarItems.map((item) => (
+            <NavLink
+              key={item.id}
+              to={item.path}
+              className={({ isActive }) => `
+                flex items-center gap-3 px-4 hover:text-white hover:bg-purple-500 py-2.5 rounded-xl text-right transition-all duration-300 font-medium
+                ${isActive
+                  ? 'bg-purple-100 text-purple-800  border border-purple-200 shadow-sm'
+                  : 'text-purple-700 hover:bg-purple-50 hover:text-purple-900'
+                }
+              `}
+            >
+              <span className="text-xl">{item.icon}</span>
+              {isOpen && <span className="text-sm">{item.title}</span>}
+            </NavLink>
+          ))}
+        </nav>
 
-      {/* Navigation */}
-      <nav className="flex-1 p-4 space-y-1">
-        {sidebarItems.map((item) => (
-          <NavLink
-            key={item.id}
-            to={item.path}
-            className={({ isActive }) => `
-              flex items-center gap-3 px-5 py-4 rounded-2xl text-right transition-all font-medium
-              ${isActive ? 'bg-purple-100 text-purple-700 shadow-sm' : 'hover:bg-purple-50'}
-            `}
-          >
-            <span className="text-2xl">{item.icon}</span>
-            {isOpen && <span>{item.title}</span>}
-          </NavLink>
-        ))}
-      </nav>
-
-      {/* AI Assistant Banner Card */}
-      {isOpen && (
-        <div className="mx-4 mb-4">
-          <div 
-            onClick={() => navigate('/')}
-            className="sb-banner__card relative overflow-hidden cursor-pointer hover:scale-[1.02] transition-all duration-200 bg-gradient-to-br from-purple-100 to-white border border-purple-200 rounded-3xl p-5"
-          >
-            <div className="sb-banner__title text-purple-900 font-bold">باشید همراه مطمئن</div>
-            <div className="sb-banner__sub text-gray-600 mt-1 text-sm">برای مدیریت مالی هوشمند</div>
-            
-            <div className="sb-banner__pill inline-block mt-4 text-xs font-bold bg-white px-4 py-1.5 rounded-full border border-purple-300 text-purple-700">
-              دستیار رایگان
+        {isOpen && (
+          <div className="px-3 pb-3 pt-1">
+            <div
+              onClick={() => navigate('/')}
+              className="relative overflow-hidden cursor-pointer rounded-xl p-3 bg-gradient-to-br from-purple-100 to-purple-200 border border-purple-300 hover:shadow-md transition-all duration-300"
+            >
+              <div className="text-purple-900 font-bold text-xs">باشید همراه مطمئن</div>
+              <div className="text-purple-800 text-[11px] mt-0.5">برای مدیریت مالی هوشمند</div>
+              <div className="inline-block mt-2 text-[10px] font-bold bg-white/80 px-2.5 py-1 rounded-full border border-purple-300 text-purple-800">
+                دستیار رایگان
+              </div>
             </div>
-
-            {/* Decorative Element */}
-            <div className="sb-banner__illus absolute -bottom-6 -left-6 w-28 h-28 rounded-3xl bg-gradient-to-br from-purple-600 to-purple-500 opacity-75 rotate-12" />
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Toggle Button */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="m-4 p-3 rounded-2xl hover:bg-purple-100 text-2xl transition-colors self-center"
-      >
-        {isOpen ? '←' : '→'}
-      </button>
+      {/* BOTTOM BUTTON */}
+      <div className="flex-shrink-0 p-3 border-t border-gray-100">
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="w-full p-2 rounded-xl bg-gray-50 hover:bg-gray-100 text-purple-700 text-xl transition-all duration-300"
+        >
+          {isOpen ? '←' : '→'}
+        </button>
+      </div>
     </aside>
   );
 }
