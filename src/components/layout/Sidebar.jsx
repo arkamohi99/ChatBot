@@ -72,7 +72,7 @@ export default function Sidebar({ isOpen, setIsOpen }) {
               <div className="text-purple-900 font-bold text-xs">باشید همراه مطمئن</div>
               <div className="text-purple-800 text-[11px] mt-0.5">برای مدیریت مالی هوشمند</div>
               <div className="inline-block mt-2 text-[10px] font-bold bg-white/80 px-2.5 py-1 rounded-full border border-purple-300 text-purple-800">
-                دستیار رایگان
+                دستیار هوشمند مالی مدیران
               </div>
             </div>
           </div>
