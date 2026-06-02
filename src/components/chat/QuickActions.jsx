@@ -1,20 +1,17 @@
-// components/chat/QuickActions.jsx
 import { quickActions } from "../../data/quickActions";
 
-export default function QuickActions() {
+export default function QuickActions({ onAction }) {
   return (
-    <div className="px-4 pb-3">
-      <p className="text-[11px] text-purple-900 mb-2">دسترسی سریع</p>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        {quickActions.map((item) => (
+    <div className="px-6 py-3 border-b border-gray-100">
+      <div className="flex gap-2 overflow-x-auto">
+        {quickActions.map((action) => (
           <button
-            key={item.id}
-            className="flex items-center justify-center gap-1.5 bg-white hover:bg-gray-50 border border-gray-200 rounded-xl py-2 px-3 text-xs font-medium text-purple-900 shadow-sm transition-all active:scale-[0.97]"
+            key={action.id}
+            onClick={() => onAction(action)}
+            className="px-4 py-2 bg-purple-50 border border-purple-200 rounded-full text-purple-700 text-sm whitespace-nowrap hover:bg-purple-100 transition"
           >
-            <span className="w-6 h-6 rounded-lg bg-purple-50 flex items-center justify-center text-base">
-              {item.icon}
-            </span>
-            {item.title}
+            <span className="mr-2">{action.icon}</span>
+            {action.title}
           </button>
         ))}
       </div>

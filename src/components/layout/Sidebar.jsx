@@ -2,10 +2,19 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { sidebarItems } from "../../data/sidebarItems";
 import customLogo from '../../assets/download.png'; // or use public path '/logo.png'
+import { useAuth } from '../../context/AuthContext';
 
 export default function Sidebar({ isOpen, setIsOpen }) {
   const navigate = useNavigate();
+  const { logout } = useAuth();
+  const handleLogout = () => {
+    logout();
 
+    // Optional: clear everything in localStorage
+    localStorage.clear();
+
+    navigate('/login');
+  };
   return (
     <aside
       className={`
@@ -45,22 +54,43 @@ export default function Sidebar({ isOpen, setIsOpen }) {
       {/* SCROLLABLE AREA - dark purple text for nav items */}
       <div className="flex-1 min-h-0 overflow-y-auto custom-scroll">
         <nav className="p-3 space-y-1">
-          {sidebarItems.map((item) => (
+          {sidebarItems.map((item) => {
+          if (item.id === 6) {
+            return (
+              <button
+                key={item.id}
+                onClick={handleLogout}
+                className="
+                  w-full flex items-center gap-3 px-4 py-2.5 rounded-xl
+                  text-purple-700 hover:bg-red-50 hover:text-red-600
+                  transition-all duration-300 font-medium text-right
+                "
+              >
+                <span className="text-xl">{item.icon}</span>
+                {isOpen && <span className="text-sm">{item.title}</span>}
+              </button>
+            );
+          }
+
+          return (
             <NavLink
               key={item.id}
               to={item.path}
               className={({ isActive }) => `
-                flex items-center gap-3 px-4 hover:text-white hover:bg-purple-500 py-2.5 rounded-xl text-right transition-all duration-300 font-medium
-                ${isActive
-                  ? 'bg-purple-100 text-purple-800  border border-purple-200 shadow-sm'
-                  : 'text-purple-700 hover:bg-purple-50 hover:text-purple-900'
+                flex items-center gap-3 px-4 py-2.5 rounded-xl text-right
+                transition-all duration-300 font-medium
+                ${
+                  isActive
+                    ? 'bg-purple-100 text-purple-800 border border-purple-200 shadow-sm'
+                    : 'text-purple-700 hover:bg-purple-50 hover:text-purple-900'
                 }
               `}
             >
               <span className="text-xl">{item.icon}</span>
               {isOpen && <span className="text-sm">{item.title}</span>}
             </NavLink>
-          ))}
+          );
+        })}
         </nav>
 
         {isOpen && (

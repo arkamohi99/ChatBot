@@ -1,11 +1,9 @@
-// components/chat/Message.jsx
 export default function Message({ message }) {
-  const isMe = message.type === "me";
+  const isMe = message.type === "user";  
 
   return (
     <div className={`flex ${isMe ? 'justify-end' : 'justify-start'} mb-6`}>
       {!isMe && (
-        // Dark purple circle
         <div className="w-10 h-10 rounded-full bg-purple-800 flex items-center justify-center text-white font-bold text-sm leading-tight mr-3 flex-shrink-0 shadow-sm">
           EN<br /><small className="text-[9px] opacity-90">AI</small>
         </div>
@@ -15,7 +13,7 @@ export default function Message({ message }) {
         <div className={`rounded-2xl px-5 py-3.5 text-[15px] leading-relaxed shadow-sm
           ${isMe 
             ? 'bg-purple-800 text-white' 
-            : 'bg-gray-100 border border-gray-200 text-purple-900'   // dark purple text for AI message
+            : 'bg-gray-100 border border-gray-200 text-purple-900'
           }`}>
           
           {message.messageType === "text" && (
