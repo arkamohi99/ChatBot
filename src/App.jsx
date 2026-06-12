@@ -30,7 +30,7 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <div 
-                  className="min-h-screen font-vazirmatn" 
+                  className="min-h-screen font-vazirmatn overflow-hidden" 
                   dir="rtl"
                   style={{
                     backgroundImage: `url(${bgImage})`,
@@ -40,17 +40,15 @@ export default function App() {
                     backgroundAttachment: 'fixed'
                   }}
                 >
-                  <div className="min-h-screen p-5">
-                    <div className="max-w-[1420px] mx-auto">
-                      <div className="flex gap-5 h-[calc(100vh-40px)]">
-                        <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-                        <div className="flex-1 h-full">
-                          <Routes>
-                            <Route path="/" element={<ChatPage />} />
-                            <Route path="/history" element={<HistoryPage />} />
-                          </Routes>
-                        </div>
-                      </div>
+                  {/* Outer padding and max-width removed. Set to full screen height and width */}
+                  <div className="flex h-screen w-full">
+                    <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
+                    
+                    <div className="flex-1 h-full">
+                      <Routes>
+                        <Route path="/" element={<ChatPage />} />
+                        <Route path="/history" element={<HistoryPage />} />
+                      </Routes>
                     </div>
                   </div>
                 </div>

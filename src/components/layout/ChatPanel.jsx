@@ -23,17 +23,11 @@ export default function ChatPanel() {
 
     socketService.connect(token);
 
-    const handleConnect = () => {
-      setIsConnected(true);
-    };
-
-    const handleDisconnect = () => {
-      setIsConnected(false);
-    };
+    const handleConnect = () => setIsConnected(true);
+    const handleDisconnect = () => setIsConnected(false);
 
     const handleBotReply = (payload) => {
       console.log('🤖 Bot Reply:', payload);
-
       const botMessage = payload.data || payload;
 
       setIsTyping(false);
@@ -62,21 +56,19 @@ export default function ChatPanel() {
       socketService.off('connect', handleConnect);
       socketService.off('disconnect', handleDisconnect);
       socketService.off('bot_reply', handleBotReply);
-
       socketService.disconnect();
     };
   }, [token]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: 'smooth',
-    });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = () => {
-    const trimmedMessage = inputMessage.trim();
+  // ✅ Updated sendMessage (accepts optional message)
+  const sendMessage = (overrideMessage) => {
+    const messageToSend = (overrideMessage || inputMessage).trim();
 
-    if (!trimmedMessage) {
+    if (!messageToSend) {
       console.warn('❌ Empty message');
       return;
     }
@@ -88,7 +80,7 @@ export default function ChatPanel() {
 
     const newUserMessage = {
       id: `user-${Date.now()}`,
-      text: trimmedMessage,
+      text: messageToSend,
       type: 'user',
       messageType: 'text',
       time: new Date().toLocaleTimeString('fa-IR', {
@@ -102,11 +94,7 @@ export default function ChatPanel() {
     console.log('📝 User Message:', newUserMessage);
 
     const existingHistory = getLocalHistory();
-
-    const updatedMessages = saveLocalHistory([
-      ...existingHistory,
-      newUserMessage,
-    ]);
+    const updatedMessages = saveLocalHistory([...existingHistory, newUserMessage]);
 
     setMessages(updatedMessages);
 
@@ -125,9 +113,7 @@ export default function ChatPanel() {
       contextMessages,
     };
 
-    console.log('📤 Sending Payload:');
-    console.log(JSON.stringify(payload, null, 2));
-
+    console.log('📤 Sending Payload:', JSON.stringify(payload, null, 2));
     socketService.emit(payload);
 
     setInputMessage('');
@@ -141,24 +127,20 @@ export default function ChatPanel() {
     }
   };
 
+  // ✅ Updated: Send immediately when clicking Quick Action
   const handleQuickAction = (text) => {
-    setInputMessage(text);
+    sendMessage(text);
   };
 
   return (
     <main className="h-full flex flex-col bg-white/70 backdrop-blur-xl rounded-3xl shadow-xl overflow-hidden">
       <header className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div
-            className={`w-2 h-2 rounded-full ${
-              isConnected ? 'bg-green-500' : 'bg-red-500'
-            }`}
-          />
+          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
           <span className="text-xs text-gray-500">
             {isConnected ? 'متصل' : 'در حال اتصال...'}
           </span>
         </div>
-
       </header>
 
       <div className="flex-1 overflow-auto p-6">
@@ -176,7 +158,6 @@ export default function ChatPanel() {
         )}
 
         {isTyping && <TypingIndicator />}
-
         <div ref={messagesEndRef} />
       </div>
 
@@ -196,11 +177,7 @@ export default function ChatPanel() {
 
           <button
             onClick={sendMessage}
-            disabled={
-              !isConnected ||
-              isTyping ||
-              !inputMessage.trim()
-            }            
+            disabled={!isConnected || isTyping || !inputMessage.trim()}
             className="w-12 h-12 bg-purple-800 text-white rounded-2xl flex items-center justify-center text-2xl hover:bg-purple-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             ➤
@@ -208,7 +185,7 @@ export default function ChatPanel() {
         </div>
 
         <p className="text-center text-[10px] text-gray-400 mt-3">
-          دستیار هوشمند بانک اقتصاد نوین
+          دستیار هوشمند بانک اقتصاد نوین ممکن است مرتکب اشتباه شود
         </p>
       </footer>
     </main>
