@@ -176,7 +176,7 @@ export default function ChatPanel() {
           />
 
           <button
-            onClick={sendMessage}
+            onClick={() => sendMessage()}   // ← Add the arrow function
             disabled={!isConnected || isTyping || !inputMessage.trim()}
             className="w-12 h-12 bg-purple-800 text-white rounded-2xl flex items-center justify-center text-2xl hover:bg-purple-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >

@@ -19,7 +19,7 @@
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.16.0",
     "remark-gfm": "^4.0.1",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
