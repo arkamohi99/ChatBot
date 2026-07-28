@@ -1,5 +1,7 @@
-// ✅ Make sure this points to your ACTUAL backend port (e.g., 8000), NOT Vite (5173)
-const SOCKET_URL = 'ws://localhost:8000/ws/chat'; 
+const SOCKET_URL =
+  import.meta.env?.VITE_SOCKET_URL ||
+  import.meta.env?.VITE_WS_URL ||
+  'ws://localhost:8000/ws/chat';
 
 class SocketService {
   constructor() {
@@ -7,84 +9,141 @@ class SocketService {
     this.listeners = {};
     this.reconnectTimer = null;
     this.token = null;
+    this.shouldReconnect = true;
   }
 
   connect(token) {
-    this.token = token;
+    if (!token) {
+      console.warn('[WebSocket] No token provided');
+      return null;
+    }
 
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    this.token = token;
+    this.shouldReconnect = true;
+
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this._trigger('connect');
       return this.socket;
     }
 
-    const fullUrl = `${SOCKET_URL}?token=${this.token}`;
-    console.log('🔄 [WebSocket] Attempting connection to:', fullUrl);
-    
+    if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
+      return this.socket;
+    }
+
+    if (this.socket) {
+      try {
+        this.socket.onclose = null;
+        this.socket.onmessage = null;
+        this.socket.onerror = null;
+        this.socket.close();
+      } catch (_) {
+        /* ignore */
+      }
+      this.socket = null;
+    }
+
+    const fullUrl = `${SOCKET_URL}?token=${encodeURIComponent(this.token)}`;
+    console.log('[WebSocket] Connecting to:', fullUrl);
+
     this.socket = new WebSocket(fullUrl);
 
     this.socket.onopen = () => {
-      console.log('🟢 [WebSocket] Connection Opened Successfully!');
+      console.log('[WebSocket] Connected');
       this._trigger('connect');
-      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
     };
 
     this.socket.onmessage = (event) => {
-      console.log('📩 [WebSocket] Raw Message Received:', event.data);
       try {
         const data = JSON.parse(event.data);
-        this._trigger('bot_reply', data);
-      } catch (error) {
-        console.error('❌ [WebSocket] Failed to parse incoming JSON:', error);
+        // Fire EACH event name exactly once (do not double-fire bot_reply)
+        if (data.event) {
+          this._trigger(data.event, data);
+        } else {
+          this._trigger('message', data);
+        }
+      } catch (err) {
+        console.error('[WebSocket] JSON parse error:', err);
       }
     };
 
     this.socket.onclose = (event) => {
-      console.log(`🔴 [WebSocket] Connection Closed. Code: ${event.code}, Reason: ${event.reason}`);
+      console.log(`[WebSocket] Closed (code ${event.code})`);
       this._trigger('disconnect');
-      this.reconnectTimer = setTimeout(() => this.connect(this.token), 3000);
+      this.socket = null;
+
+      if (this.shouldReconnect && this.token) {
+        this.reconnectTimer = setTimeout(() => {
+          this.connect(this.token);
+        }, 3000);
+      }
     };
 
-    this.socket.onerror = (error) => {
-      console.error('⚠️ [WebSocket] Error occurred:', error);
-      this._trigger('error', error);
+    this.socket.onerror = (err) => {
+      console.error('[WebSocket] Error', err);
+      this._trigger('error', err);
     };
 
     return this.socket;
   }
 
   disconnect() {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.socket) {
-      console.log('🛑 [WebSocket] Manually disconnecting...');
-      this.socket.close();
+      try {
+        this.socket.onclose = null;
+        this.socket.close();
+      } catch (_) {
+        /* ignore */
+      }
       this.socket = null;
     }
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
   }
 
-  on(event, callback) {
+  /** Preferred send API */
+  send(payload) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      console.warn('[WebSocket] Cannot send — not connected');
+      return false;
+    }
+    this.socket.send(
+      typeof payload === 'string' ? payload : JSON.stringify(payload)
+    );
+    return true;
+  }
+
+  /** Alias used by some ChatPanel versions */
+  emit(payload) {
+    return this.send(payload);
+  }
+
+  on(event, handler) {
     if (!this.listeners[event]) this.listeners[event] = [];
-    this.listeners[event].push(callback);
+    this.listeners[event].push(handler);
   }
 
-  off(event, callback) {
+  off(event, handler) {
     if (!this.listeners[event]) return;
-    this.listeners[event] = this.listeners[event].filter(cb => cb !== callback);
+    this.listeners[event] = this.listeners[event].filter((h) => h !== handler);
   }
 
   _trigger(event, data) {
-    if (this.listeners[event]) {
-      this.listeners[event].forEach(callback => callback(data));
-    }
-  }
-
-  emit(data) {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      const payload = JSON.stringify(data);
-      console.log('📤 [WebSocket] Sending Message:', payload);
-      this.socket.send(payload);
-    } else {
-      console.warn('🚧 [WebSocket] Cannot send message, socket is not OPEN. Current state:', this.socket?.readyState);
-    }
+    (this.listeners[event] || []).forEach((h) => {
+      try {
+        h(data);
+      } catch (e) {
+        console.error(`[WebSocket] listener error for ${event}`, e);
+      }
+    });
   }
 }
 
-export default new SocketService();
+const socketService = new SocketService();
+export default socketService;

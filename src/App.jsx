@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { AuthProvider } from './context/AuthContext';
+import { RequestsProvider } from './context/RequestsContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import Sidebar from './components/layout/Sidebar';
 import ChatPage from './pages/ChatPage';
@@ -22,41 +23,42 @@ export default function App() {
 
   return (
     <AuthProvider>
-      <Router basename={basename}>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            path="/*"
-            element={
-              <ProtectedRoute>
-                <div 
-                  className="min-h-screen font-vazirmatn overflow-hidden" 
-                  dir="rtl"
-                  style={{
-                    backgroundImage: `url(${bgImage})`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    backgroundRepeat: 'no-repeat',
-                    backgroundAttachment: 'fixed'
-                  }}
-                >
-                  {/* Outer padding and max-width removed. Set to full screen height and width */}
-                  <div className="flex h-screen w-full">
-                    <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
-                    
-                    <div className="flex-1 h-full">
-                      <Routes>
-                        <Route path="/" element={<ChatPage />} />
-                        <Route path="/history" element={<HistoryPage />} />
-                      </Routes>
+      <RequestsProvider>
+        <Router basename={basename}>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <div 
+                    className="min-h-screen font-vazirmatn overflow-hidden" 
+                    dir="rtl"
+                    style={{
+                      backgroundImage: `url(${bgImage})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      backgroundRepeat: 'no-repeat',
+                      backgroundAttachment: 'fixed'
+                    }}
+                  >
+                    <div className="flex h-screen w-full">
+                      <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
+                      
+                      <div className="flex-1 h-full">
+                        <Routes>
+                          <Route path="/" element={<ChatPage />} />
+                          <Route path="/history" element={<HistoryPage />} />
+                        </Routes>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </Router>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </Router>
+      </RequestsProvider>
     </AuthProvider>
   );
 }

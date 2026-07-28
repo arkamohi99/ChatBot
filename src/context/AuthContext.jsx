@@ -16,7 +16,11 @@ export function AuthProvider({ children }) {
     if (token) {
       const storedUser = localStorage.getItem('chat_user');
       if (storedUser) {
-        setUser(JSON.parse(storedUser));
+        try {
+          setUser(JSON.parse(storedUser));
+        } catch {
+          localStorage.removeItem('chat_user');
+        }
       }
     }
     setLoading(false);
@@ -25,26 +29,28 @@ export function AuthProvider({ children }) {
   const login = async (username, password) => {
     try {
       const response = await api.post('/auth/login', { username, password });
-      
-      // ✅ Look for access_token instead of token
       const { access_token } = response.data;
-      
+
       if (!access_token) {
-        throw new Error('Invalid credentials');
+        throw new Error('No access_token received');
       }
 
-      // ✅ Create a temporary user object since the backend doesn't send one
-      const userData = { username: username, displayName: username };
+      const userData = { username, displayName: username };
 
       localStorage.setItem('chat_token', access_token);
       localStorage.setItem('chat_user', JSON.stringify(userData));
-      
+
       setToken(access_token);
       setUser(userData);
-      
+
       return { success: true };
     } catch (error) {
-      return { success: false, error: error.response?.data?.error || 'Login failed' };
+      const msg =
+        error.response?.data?.detail ||
+        error.response?.data?.error ||
+        error.message ||
+        'Login failed';
+      return { success: false, error: msg };
     }
   };
 
@@ -60,7 +66,8 @@ export function AuthProvider({ children }) {
     token,
     login,
     logout,
-    isAuthenticated: !!token // This will now correctly evaluate to true
+    isAuthenticated: !!token,
+    loading,
   };
 
   return (
