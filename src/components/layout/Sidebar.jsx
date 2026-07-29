@@ -20,7 +20,10 @@ export default function Sidebar({ isOpen, setIsOpen }) {
   };
 
   const goNewChat = () => {
-    navigate('/');
+    navigate('/', { replace: true });
+    // اگر تابع یا روشی برای پاک کردن استیت چت در سطح والد دارید اینجا فراخوانی کنید،
+    // یا با رفرش سریع یا ریست کردن سیشن:
+    window.location.href = import.meta.env.BASE_URL || '/';
   };
 
   if (!isOpen) {

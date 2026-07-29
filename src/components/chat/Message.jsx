@@ -23,7 +23,7 @@ function ExcelIcon({ className = 'w-9 h-9' }) {
  * Permanent: Telegram-style file card (icon + name + size hint).
  * Both centered under the message bubble.
  */
-export default function Message({ message, onExport, onConfirmRowCap, onReaction, conversationId, exportingId }) {
+export default function Message({ message, onExport, onReaction, conversationId, exportingId }) {
   const isMe = message.type === 'user' || message.type === 'me';
   const [downloading, setDownloading] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -41,6 +41,13 @@ export default function Message({ message, onExport, onConfirmRowCap, onReaction
   const messageType = message.messageType || 'text';
   const text = message.text || '';
 
+  // 💡 FIX: a clarification message must never show export UI, no matter
+  // what other flags say. This is checked FIRST and used to hard-gate
+  // everything export-related below — belt-and-suspenders on top of the
+  // backend now always setting table_available/export_ready_now to False
+  // for a clarification turn (see nodes.py::generate_response).
+  const needsClarification = meta.needs_clarification === true;
+
   const idStr = String(message.id ?? '');
   const numericId = Number(message.id);
   const hasRealId =
@@ -51,9 +58,10 @@ export default function Message({ message, onExport, onConfirmRowCap, onReaction
 
   const exportFile = meta.export_file;
   const hasPermanentFile =
-    !!exportFile ||
-    meta.has_exportable_data === true ||
-    meta.export_file_id != null;
+    !needsClarification &&
+    (!!exportFile ||
+      meta.has_exportable_data === true ||
+      meta.export_file_id != null);
 
   const exportFiles = Array.isArray(meta.export_files) && meta.export_files.length
     ? meta.export_files
@@ -66,11 +74,18 @@ export default function Message({ message, onExport, onConfirmRowCap, onReaction
     meta.export_file_name ||
     'گزارش.xlsx';
 
+  // 💡 FIX: only trust the two explicit backend flags. The old third/fourth
+  // OR-branches (`per_branch_data`/`message.data` non-empty) inferred
+  // export-readiness from data SHAPE instead of the backend's explicit
+  // table_available/export_ready_now contract. They happened to be
+  // harmless only because execute_query never runs on a clarification
+  // turn — but that's an accident of current control flow, not a
+  // guarantee, and it's exactly the kind of implicit coupling that
+  // silently breaks the next time someone touches the graph. Also
+  // hard-gated on needsClarification regardless.
   const tableAvailable =
-    meta.table_available === true ||
-    meta.export_ready_now === true ||
-    (Array.isArray(meta.per_branch_data) && meta.per_branch_data.length > 0) ||
-    (Array.isArray(message.data) && message.data.length > 0);
+    !needsClarification &&
+    (meta.table_available === true || meta.export_ready_now === true);
 
   const createdAt = message.timestamp || Date.now();
   const stillWithinTtl = now - createdAt < EXPORT_TTL_MS;
@@ -84,8 +99,12 @@ export default function Message({ message, onExport, onConfirmRowCap, onReaction
   const showTempExportBtn =
     !isMe && hasRealId && tableAvailable && stillWithinTtl && !hasPermanentFile;
 
-  const needsRowCapConfirm =
-    !isMe && hasRealId && meta.row_cap_pending === true;
+  // 💡 REMOVED: `needsRowCapConfirm` / the confirm_row_cap button. That
+  // flow's backend handling (ProcessBankQueryUseCase.execute_confirmed_row_cap,
+  // PendingQueryCache, the websocket action=="confirm_row_cap" branch) was
+  // deleted — auto-capping replaced it. meta.row_cap_pending is never sent
+  // by the backend anymore, so this button never actually rendered, but it
+  // was dead weight implying a flow that no longer exists.
 
   const isExporting = exportingId === message.id || exportingId === numericId;
 
@@ -126,8 +145,11 @@ export default function Message({ message, onExport, onConfirmRowCap, onReaction
     typeof onReaction === 'function' &&
     conversationId != null;
 
+  // 💡 FIX: dropped `needsRowCapConfirm` from the OR — that dead flow's
+  // button was removed below, so it can no longer contribute to whether
+  // the actions row renders.
   const showActions =
-    !isMe && (showTempExportBtn || needsRowCapConfirm || hasPermanentFile || showFeedback);
+    !isMe && (showTempExportBtn || hasPermanentFile || showFeedback);
 
 
   const submitReaction = async (liked, comment = null) => {
@@ -240,20 +262,7 @@ export default function Message({ message, onExport, onConfirmRowCap, onReaction
             className="mt-2.5 flex flex-col items-center gap-2 w-full max-w-[320px]"
             dir="rtl"
           >
-            {needsRowCapConfirm && onConfirmRowCap && (
-              <button
-                type="button"
-                onClick={() => onConfirmRowCap(message)}
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl
-                           text-[13px] font-medium text-amber-900
-                           bg-amber-50 border border-amber-200/80
-                           hover:bg-amber-100 hover:border-amber-300
-                           active:scale-[0.98] transition-all duration-150 shadow-sm"
-              >
-                <span className="text-base leading-none">⚠️</span>
-                <span>تایید و ادامه (۱۰٬۰۰۰ ردیف نخست)</span>
-              </button>
-            )}
+            {/* 💡 REMOVED: the row-cap-confirm button — dead flow, see above */}
 
             {/* Excel options — under bubble */}
             {showTempExportBtn && (

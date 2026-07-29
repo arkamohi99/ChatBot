@@ -12,7 +12,13 @@ export default function ChatPanel() {
   const location = useLocation();
   const navigate = useNavigate();
   const { token, user } = useAuth();
-  const { addQueued, markReady, markFailed } = useRequests();
+  
+  // 💡 اضافه کردن Ref برای درخواست‌ها تا موقع رندر تاریخچه در دسترس باشند
+  const { items: requestItems, addQueued, markReady, markFailed } = useRequests();
+  const requestItemsRef = useRef(requestItems);
+  useEffect(() => {
+      requestItemsRef.current = requestItems;
+  }, [requestItems]);
 
   const [messages, setMessages] = useState([]);
   const exportEstimatesRef = useRef({});
@@ -33,11 +39,8 @@ export default function ChatPanel() {
   const isFirstLoad = useRef(true);
   const sendingRef = useRef(false);
 
-  // 💡 حل مشکل قطعی سوکت هنگام تغییر گفتگو: استفاده از Ref برای آیدی
   const conversationIdRef = useRef(conversationId);
-  useEffect(() => {
-    conversationIdRef.current = conversationId;
-  }, [conversationId]);
+  useEffect(() => { conversationIdRef.current = conversationId; }, [conversationId]);
 
   const mapServerTurn = (m) => {
     const bubbles = [];
@@ -50,13 +53,31 @@ export default function ChatPanel() {
       });
     }
     if (m.narrative) {
+      const matchedJob = requestItemsRef.current.find(req => 
+          String(req.messageId) === String(m.id) && 
+          (req.status === 'ready' || req.status === 'seen')
+      );
+      
+      let exportFiles = matchedJob?.export_files || [];
+      
+      // 💡 خواندن لیست فایل‌ها از API در صورتی که کاربر صفحه را رفرش کرده باشد
+      if (exportFiles.length === 0 && m.export_file_name && typeof m.export_file_name === 'string' && m.export_file_name.startsWith('[')) {
+          try {
+              exportFiles = JSON.parse(m.export_file_name);
+          } catch(e) {}
+      }
+
       bubbles.push({
         id: m.id, text: m.narrative, type: 'bot', messageType: 'text', time, timestamp: timestamp + 1, raw: m,
         reaction: m.reaction === true || m.reaction === false ? m.reaction : null, review: m.review || null,
         metadata: {
-          has_exportable_data: !!m.has_exportable_data, export_file_id: m.export_file_id ?? null,
-          export_file_name: m.export_file_name ?? null, table_available: !!m.has_exportable_data,
-          conversation_id: m.conversation_id, message_id: m.id,
+          has_exportable_data: !!m.has_exportable_data || !!matchedJob, 
+          export_file_id: m.export_file_id ?? null,
+          export_file_name: m.export_file_name ?? null, 
+          table_available: !!m.has_exportable_data || !!matchedJob,
+          conversation_id: m.conversation_id, 
+          message_id: m.id,
+          export_files: exportFiles.length > 0 ? exportFiles : undefined
         },
       });
     }
@@ -132,15 +153,13 @@ export default function ChatPanel() {
     setTimeout(() => setExportingId(null), 8000);
   }, [conversationId]);
 
-  const handleConfirmRowCap = useCallback((message) => {
-    const convId = conversationId || message?.metadata?.conversation_id || null;
-    const msgId = Number(message?.id ?? message?.metadata?.message_id);
-    if (!Number.isFinite(msgId) || msgId <= 0 || !convId) return;
-    setIsTyping(true);
-    socketService.emit({ action: 'confirm_row_cap', message_id: msgId, conversation_id: Number(convId) });
-  }, [conversationId]);
+  // 💡 REMOVED: handleConfirmRowCap — its only consumer was Message.jsx's
+  // now-removed row-cap-confirm button, and the backend action it emitted
+  // ("confirm_row_cap") has no handler anymore (see websocket_router.py
+  // cleanup — that branch was deleted, ProcessBankQueryUseCase.execute_
+  // confirmed_row_cap doesn't exist). Emitting it today would just fall
+  // through to the generic "No messages provided" error on the backend.
 
-  // 💡 هوک سوکت: وابستگی‌های اضافی و ریس‌کاندیشن‌ها برطرف شده‌اند
   useEffect(() => {
     if (!token) return;
 
@@ -155,7 +174,6 @@ export default function ChatPanel() {
 
       const exportFile = bot.metadata?.export_file;
       if (exportFile?.download_url || exportFile?.url) {
-        // خواندن آیدی امن از رف
         const cId = bot.metadata?.conversation_id || conversationIdRef.current;
         const mId = bot.metadata?.message_id || bot.id;
         if (cId && mId) conversationApi.downloadExportFile(Number(cId), Number(mId), exportFile.file_name).catch(() => {});
@@ -169,7 +187,6 @@ export default function ChatPanel() {
         metadata: {
           ...(bot.metadata || {}), has_exportable_data: !!(bot.metadata?.export_file || bot.metadata?.has_exportable_data),
           message_id: bot.metadata?.message_id || bot.id, 
-          // خواندن آیدی امن از رف
           conversation_id: bot.metadata?.conversation_id || conversationIdRef.current || null,
         },
       };
@@ -198,22 +215,27 @@ export default function ChatPanel() {
       const d = payload?.data || payload;
       setExportingId(null);
       markReady(d || {});
+      
       const fileMeta = { download_url: d?.download_url, file_name: d?.file_name };
+      const exportFiles = d?.export_files && d.export_files.length > 0 ? d.export_files : [fileMeta];
       
       setMessages((prev) => {
         const mid = d?.message_id;
         const jobId = d?.job_id;
         const queuedId = `export-queued-${jobId}`;
         let hasQueuedMsg = false;
+        
         const next = prev.map((m) => {
           if (mid != null && (String(m.id) === String(mid) || String(m.metadata?.message_id) === String(mid))) {
-            return { ...m, metadata: { ...m.metadata, export_file: fileMeta, has_exportable_data: true, export_files: [fileMeta] } };
+            return {
+              ...m, metadata: { ...m.metadata, export_file: fileMeta, has_exportable_data: true, export_files: exportFiles }
+            };
           }
           if (String(m.id) === queuedId) {
             hasQueuedMsg = true;
             return {
               ...m, id: `export-ready-${jobId}`, text: d?.message || 'فایل اکسل شما آماده دانلود است.',
-              metadata: { export_file: fileMeta, has_exportable_data: true, message_id: mid, conversation_id: d?.conversation_id }
+              metadata: { export_file: fileMeta, has_exportable_data: true, message_id: mid, conversation_id: d?.conversation_id, export_files: exportFiles }
             };
           }
           return m;
@@ -222,7 +244,7 @@ export default function ChatPanel() {
         if (!hasQueuedMsg) {
           next.push({
             id: `export-ready-${jobId || Date.now()}`, text: d?.message || 'فایل اکسل شما آماده دانلود است.', type: 'bot', messageType: 'text', timestamp: Date.now(),
-            metadata: { export_file: fileMeta, has_exportable_data: true, message_id: mid, conversation_id: d?.conversation_id }
+            metadata: { export_file: fileMeta, has_exportable_data: true, message_id: mid, conversation_id: d?.conversation_id, export_files: exportFiles }
           });
         }
         return next;
@@ -248,7 +270,6 @@ export default function ChatPanel() {
       });
     };
 
-    // 💡 رفع باگ سوکت: اول تمام ایونت‌ها را ست می‌کنیم
     socketService.on('connect', onConnect); 
     socketService.on('disconnect', onDisconnect);
     socketService.on('bot_reply', onBotReply); 
@@ -256,10 +277,8 @@ export default function ChatPanel() {
     socketService.on('export_ready', onExportReady); 
     socketService.on('export_failed', onExportFailed);
 
-    // 💡 سپس کانکت می‌کنیم (تا ایونت‌های همگام را از دست ندهیم)
     socketService.connect(token);
 
-    // 💡 بررسی دستی برای حالتی که سوکت از قبل به سرور وصل بوده است
     if (socketService.socket?.readyState === 1) {
       setIsConnected(true);
     }
@@ -272,7 +291,6 @@ export default function ChatPanel() {
       socketService.off('export_ready', onExportReady); 
       socketService.off('export_failed', onExportFailed);
     };
-    // 💡 حذف آیدی از لیست وابستگی‌ها
   }, [token, addQueued, markReady, markFailed]);
 
   useEffect(() => {
@@ -300,6 +318,8 @@ export default function ChatPanel() {
   };
 
   const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } };
+  
+  // دکمه نیو چت دیگر کارش را به Sidebar سپرده، اما اگر اینجا استفاده شود ریست می‌کند
   const startNewConversation = () => { setMessages([]); setConversationId(null); setNextCursor(null); setHasMore(false); sendingRef.current = false; setIsTyping(false); setExportingId(null); };
 
   const handleReaction = useCallback(async (message, { reaction, comment }) => {
@@ -312,22 +332,13 @@ export default function ChatPanel() {
 
   return (
     <main className="h-full flex flex-col bg-white/70 backdrop-blur-xl rounded-3xl shadow-xl overflow-hidden">
-      <header className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-          <span className="text-xs text-gray-500">{isConnected ? 'متصل' : 'در حال اتصال...'}</span>
-          {conversationId && <span className="text-xs text-purple-700 bg-purple-50 px-2.5 py-1 rounded-full">گفتگو #{conversationId}</span>}
-        </div>
-        <button onClick={startNewConversation} className="text-xs text-purple-700 hover:bg-purple-100 bg-purple-50 px-3 py-1.5 rounded-xl transition">گفتگوی جدید</button>
-      </header>
-
       <div ref={messagesContainerRef} onScroll={handleScroll} className="flex-1 overflow-auto p-6">
         {initialLoading && <div className="text-center text-purple-500 py-8">در حال بارگذاری گفتگو...</div>}
         {loadingOlder && <div className="text-center text-xs text-purple-400 py-3">در حال دریافت پیام‌های قبلی...</div>}
         {!initialLoading && messages.length === 0 && <div className="h-full flex items-center justify-center text-purple-400 text-sm">گفتگو را شروع کنید...</div>}
 
         {messages.map((msg) => (
-          <Message key={msg.id} message={msg} onExport={handleExport} onConfirmRowCap={handleConfirmRowCap} onReaction={handleReaction} conversationId={conversationId} exportingId={exportingId} />
+          <Message key={msg.id} message={msg} onExport={handleExport} onReaction={handleReaction} conversationId={conversationId} exportingId={exportingId} />
         ))}
 
         {isTyping && <TypingIndicator />}

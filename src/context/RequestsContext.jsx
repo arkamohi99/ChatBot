@@ -17,6 +17,7 @@ export function RequestsProvider({ children }) {
           status: 'queued',
           label: job.message || job.label || 'درخواست اکسل کامل',
           rowCount: job.row_count ?? job.rowCount,
+          export_files: job.export_files || [], // 💡 این فیلد برای چند فایل مهم است
           createdAt: Date.now(),
         },
         ...prev,
@@ -36,6 +37,7 @@ export function RequestsProvider({ children }) {
               status: 'ready',
               downloadUrl: job.download_url,
               fileName: job.file_name,
+              export_files: job.export_files || x.export_files, // 💡 بروزرسانی فایل‌ها
               label: job.message || x.label || 'اکسل آماده است',
             }
           : x
@@ -56,11 +58,10 @@ export function RequestsProvider({ children }) {
 
   const markSeen = useCallback((jobId) => {
     setItems((prev) =>
-      prev.map((x) => (x.jobId === jobId ? { ...x, status: x.status === 'ready' ? 'seen' : x.status } : x))
+      prev.map((x) => (x.jobId === jobId ? { ...x, status: 'seen' } : x))
     );
   }, []);
 
-  // پاک کردن نوتیفیکیشن‌ها هنگام باز کردن منو
   const markAllSeen = useCallback(() => {
     setItems((prev) =>
       prev.map((x) => {
@@ -71,7 +72,6 @@ export function RequestsProvider({ children }) {
     );
   }, []);
 
-  // نشان دادن نوتیفیکیشن برای هر دو حالت جدید (آماده شده یا تازه ثبت شده)
   const unreadCount = useMemo(
     () => items.filter((x) => x.status === 'ready' || x.status === 'queued').length,
     [items]
@@ -82,17 +82,11 @@ export function RequestsProvider({ children }) {
     [items, unreadCount, addQueued, markReady, markFailed, markSeen, markAllSeen]
   );
 
-  return (
-    <RequestsContext.Provider value={value}>{children}</RequestsContext.Provider>
-  );
+  return <RequestsContext.Provider value={value}>{children}</RequestsContext.Provider>;
 }
 
 export function useRequests() {
   const ctx = useContext(RequestsContext);
-  if (!ctx) {
-    return {
-      items: [], unreadCount: 0, addQueued: () => {}, markReady: () => {}, markFailed: () => {}, markSeen: () => {}, markAllSeen: () => {},
-    };
-  }
+  if (!ctx) return { items: [], unreadCount: 0, addQueued: () => {}, markReady: () => {}, markFailed: () => {}, markSeen: () => {}, markAllSeen: () => {} };
   return ctx;
 }
