@@ -135,8 +135,16 @@ export default function ChatPanel() {
 
     if (mode === 'download') {
       try {
-        const fileName = message?.metadata?.export_file_name || message?.metadata?.export_file?.file_name || 'export.xlsx';
-        await conversationApi.downloadExportFile(Number(convId), msgId, fileName);
+        const fileName =
+          message?.metadata?.export_file?.file_name ||
+          message?.metadata?.export_file_name ||
+          'export.xlsx';
+        const fileId =
+          message?.metadata?.export_file?.id ??
+          message?.metadata?.export_file?.file_id ??
+          message?.metadata?.export_file_id ??
+          null;
+        await conversationApi.downloadExportFile(Number(convId), msgId, fileName, fileId);
       } catch (err) {
         alert(err?.response?.status === 404 || err?.response?.status === 410 ? 'فایل در دسترس نیست.' : 'دانلود فایل ممکن نشد.');
       }

@@ -25,10 +25,13 @@ export const conversationApi = {
    * Stream xlsx through API with Authorization (blob).
    * Avoids browser→MinIO presigned URL SignatureDoesNotMatch.
    */
-  downloadExportFile: async (conversationId, messageId, fileName = 'export.xlsx') => {
+  downloadExportFile: async (conversationId, messageId, fileName = 'export.xlsx', fileId = null) => {
     const res = await api.get(
       `/conversations/${conversationId}/messages/${messageId}/export/file`,
-      { responseType: 'blob' }
+      {
+        responseType: 'blob',
+        params: fileId != null ? { file_id: fileId } : undefined,
+      }
     );
     const blob = res.data;
     // If server returned JSON error as blob, surface it
