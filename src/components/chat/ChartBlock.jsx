@@ -1,0 +1,545 @@
+import React from 'react';
+import Chart from 'react-apexcharts';
+
+const JALALI_MONTHS = [
+  'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
+  'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند',
+];
+
+/** Professional banking dashboard palette (reference: clean KPI cards) */
+const PALETTE = [
+  '#2563EB', // blue
+  '#F59E0B', // amber
+  '#10B981', // emerald
+  '#8B5CF6', // violet
+  '#EF4444', // red
+  '#06B6D4', // cyan
+  '#EC4899', // pink
+  '#84CC16', // lime
+  '#6366F1', // indigo
+  '#F97316', // orange
+  '#14B8A6', // teal
+  '#A855F7', // purple
+];
+
+const MAX_SERIES = 10;
+const MAX_CATEGORIES = 24;
+
+function formatTimeLabel(label, unit) {
+  if (!label || typeof label !== 'string') return label;
+  const parts = label.split(/[/\-T]/);
+  if (unit === 'month' && parts.length >= 2) {
+    const mIndex = parseInt(parts[1], 10) - 1;
+    return `${JALALI_MONTHS[mIndex] || parts[1]} ${parts[0]}`;
+  }
+  if (unit === 'day' && parts.length >= 3) {
+    const mIndex = parseInt(parts[1], 10) - 1;
+    return `${parseInt(parts[2], 10)} ${JALALI_MONTHS[mIndex] || parts[1]}`;
+  }
+  if (unit === 'year' && parts.length >= 1) return parts[0];
+  return label;
+}
+
+function toFaNumber(n) {
+  if (n == null || Number.isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${(n / 1e9).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}B`;
+  if (abs >= 1e6) return `${(n / 1e6).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}M`;
+  if (abs >= 1e3) return `${(n / 1e3).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}K`;
+  return Number(n).toLocaleString('fa-IR', { maximumFractionDigits: 1 });
+}
+
+function toFaFull(n) {
+  if (n == null || Number.isNaN(n)) return 'بدون داده';
+  return Number(n).toLocaleString('fa-IR', { maximumFractionDigits: 2 });
+}
+
+function truncateLabel(label, max = 16) {
+  if (!label || typeof label !== 'string') return label || 'نامشخص';
+  return label.length > max ? `${label.slice(0, max)}…` : label;
+}
+
+function EmptyState({ message = 'داده‌ای برای نمایش نمودار موجود نیست.' }) {
+  return (
+    <div className="w-full min-h-[240px] flex flex-col items-center justify-center gap-3 text-slate-400" dir="rtl">
+      <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center">
+        <svg className="w-7 h-7 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 17V9m6 8V5M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+      </div>
+      <p className="text-[13px] font-medium text-slate-500">{message}</p>
+    </div>
+  );
+}
+
+function ChartShell({ title, subtitle, note, children, footnote }) {
+  return (
+    <div
+      className="w-full h-full flex flex-col bg-white rounded-2xl border border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.06),0_8px_24px_rgba(15,23,42,0.04)] overflow-hidden"
+      dir="ltr"
+    >
+      {(title || subtitle) && (
+        <div className="px-5 pt-4 pb-1 text-center" dir="rtl">
+          {title && (
+            <h3 className="text-[14.5px] font-bold text-slate-800 tracking-tight leading-snug">
+              {title}
+            </h3>
+          )}
+          {subtitle && (
+            <p className="text-[11.5px] text-slate-500 mt-0.5 font-medium">{subtitle}</p>
+          )}
+        </div>
+      )}
+      {note && (
+        <p className="text-[11px] text-amber-700 bg-amber-50/80 border-y border-amber-100/80 px-4 py-1.5 text-center" dir="rtl">
+          {note}
+        </p>
+      )}
+      <div className="flex-1 min-h-0 px-2 pb-1">{children}</div>
+      {footnote && (
+        <p className="text-center text-[10px] text-slate-400 pb-2.5 px-4" dir="rtl">
+          {footnote}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const FONT = 'Vazirmatn, Tahoma, system-ui, -apple-system, sans-serif';
+
+const BASE_CHART = {
+  fontFamily: FONT,
+  background: 'transparent',
+  toolbar: {
+    show: true,
+    offsetY: 0,
+    tools: {
+      download: true,
+      selection: true,
+      zoom: true,
+      zoomin: true,
+      zoomout: true,
+      pan: true,
+      reset: true,
+    },
+    export: {
+      csv: { headerCategory: 'برچسب' },
+    },
+  },
+  zoom: { enabled: true },
+  animations: {
+    enabled: true,
+    easing: 'easeinout',
+    speed: 450,
+    animateGradually: { enabled: true, delay: 80 },
+  },
+  dropShadow: { enabled: false },
+};
+
+const GRID = {
+  borderColor: '#E2E8F0',
+  strokeDashArray: 4,
+  xaxis: { lines: { show: false } },
+  yaxis: { lines: { show: true } },
+  padding: { top: 8, right: 12, bottom: 0, left: 8 },
+};
+
+const TOOLTIP = {
+  theme: 'light',
+  style: { fontSize: '12px', fontFamily: FONT },
+  marker: { show: true },
+  fillSeriesColor: false,
+};
+
+const LEGEND = {
+  position: 'top',
+  horizontalAlign: 'center',
+  floating: false,
+  fontSize: '11.5px',
+  fontFamily: FONT,
+  fontWeight: 600,
+  markers: { width: 8, height: 8, radius: 2, offsetX: -2 },
+  itemMargin: { horizontal: 10, vertical: 2 },
+  onItemClick: { toggleDataSeries: true },
+  onItemHover: { highlightDataSeries: true },
+};
+
+/**
+ * Snapshot bar payloads often arrive as N series × 1 bucket (one per branch).
+ * That produces a useless multi-color legend. Flatten to 1 series × N categories.
+ * Comparison bars (N series × M shared categories) stay grouped.
+ */
+function normalizeBarData(series, scale, kpiName) {
+  if (!series?.length) {
+    return { categories: [], apexSeries: [], cappedNote: null, mode: 'empty' };
+  }
+
+  const singleBucketEach = series.every((s) => (s.buckets?.length || 0) <= 1);
+  const sharedLabels =
+    !singleBucketEach &&
+    series.length > 1 &&
+    series.every(
+      (s) =>
+        (s.buckets?.length || 0) === (series[0].buckets?.length || 0) &&
+        (s.buckets || []).every((b, i) => b.label === series[0].buckets[i]?.label)
+    );
+
+  // Case A: snapshot — one value per entity → categorical bar
+  if (singleBucketEach) {
+    let rows = series.map((s) => ({
+      name: s.entity_name || s.buckets?.[0]?.label || 'نامشخص',
+      value: s.buckets?.[0]?.value != null ? s.buckets[0].value / scale : null,
+    }));
+
+    let cappedNote = null;
+    if (rows.length > MAX_CATEGORIES) {
+      rows = [...rows]
+        .sort((a, b) => Math.abs(b.value || 0) - Math.abs(a.value || 0))
+        .slice(0, MAX_CATEGORIES);
+      cappedNote = `نمایش ${MAX_CATEGORIES} مورد برتر از ${series.length} مورد`;
+    }
+
+    return {
+      categories: rows.map((r) => r.name),
+      apexSeries: [
+        {
+          name: kpiName || 'مقدار',
+          data: rows.map((r) => r.value),
+        },
+      ],
+      cappedNote,
+      mode: 'snapshot',
+    };
+  }
+
+  // Case B: grouped / comparison — series = periods (or groups), buckets = entities
+  let categories = (series[0]?.buckets || []).map((b) => b.label);
+  let working = series;
+  let cappedNote = null;
+
+  if (categories.length > MAX_CATEGORIES) {
+    const idxRanked = categories
+      .map((_, i) => i)
+      .sort((a, b) => {
+        const av = Math.abs(working[0]?.buckets?.[a]?.value ?? 0);
+        const bv = Math.abs(working[0]?.buckets?.[b]?.value ?? 0);
+        return bv - av;
+      })
+      .slice(0, MAX_CATEGORIES);
+    cappedNote = `نمایش ${MAX_CATEGORIES} مورد برتر از ${categories.length} مورد`;
+    categories = idxRanked.map((i) => categories[i]);
+    working = working.map((s) => ({
+      ...s,
+      buckets: idxRanked.map((i) => s.buckets[i]),
+    }));
+  }
+
+  if (working.length > MAX_SERIES) {
+    cappedNote = [
+      cappedNote,
+      `نمایش ${MAX_SERIES} سری از ${working.length}`,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    working = working.slice(0, MAX_SERIES);
+  }
+
+  return {
+    categories,
+    apexSeries: working.map((s) => ({
+      name: s.entity_name || 'سری',
+      data: (s.buckets || []).map((b) => (b.value != null ? b.value / scale : null)),
+    })),
+    cappedNote,
+    mode: sharedLabels ? 'grouped' : 'matrix',
+  };
+}
+
+export default function ChartBlock({ chart, meta, isFullscreen = false }) {
+  if (!chart || !chart.chart_type) return null;
+
+  const {
+    chart_type,
+    kpi_name,
+    unit_label,
+    scale = 1,
+    series = [],
+    bucket_unit,
+    title_fa,
+  } = chart;
+
+  const title = title_fa || kpi_name || '';
+  const subtitle = unit_label ? `واحد: ${unit_label}` : '';
+  const chartHeight = isFullscreen ? '100%' : 360;
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BAR
+  // ═══════════════════════════════════════════════════════════════════════
+  if (chart_type === 'bar') {
+    const { categories, apexSeries, cappedNote, mode } = normalizeBarData(
+      series,
+      scale,
+      kpi_name
+    );
+
+    const hasData = apexSeries.some((s) => (s.data || []).some((v) => v != null));
+    if (!hasData) {
+      return (
+        <ChartShell title={title} subtitle={subtitle}>
+          <EmptyState />
+        </ChartShell>
+      );
+    }
+
+    const nCat = categories.length;
+    const singleSeries = apexSeries.length === 1;
+    // Horizontal bars when many categories — more readable for branch names
+    const horizontal = singleSeries && nCat >= 8;
+
+    const options = {
+      chart: {
+        ...BASE_CHART,
+        type: 'bar',
+        stacked: false,
+      },
+      plotOptions: {
+        bar: {
+          horizontal,
+          borderRadius: 6,
+          borderRadiusApplication: 'end',
+          borderRadiusWhenStacked: 'last',
+          columnWidth: singleSeries ? (nCat <= 4 ? '45%' : nCat <= 8 ? '55%' : '68%') : '70%',
+          barHeight: horizontal ? (nCat > 12 ? '72%' : '58%') : undefined,
+          dataLabels: { position: horizontal ? 'top' : 'top' },
+          distributed: singleSeries, // one color per category when snapshot
+        },
+      },
+      colors: singleSeries ? PALETTE : PALETTE,
+      fill: {
+        type: 'solid',
+        opacity: 1,
+      },
+      stroke: {
+        show: true,
+        width: 0,
+        colors: ['transparent'],
+      },
+      dataLabels: { enabled: false },
+      grid: {
+        ...GRID,
+        xaxis: { lines: { show: horizontal } },
+        yaxis: { lines: { show: !horizontal } },
+      },
+      xaxis: {
+        categories: categories.map((c) => truncateLabel(c, horizontal ? 22 : 14)),
+        labels: {
+          style: { fontSize: '11px', fontFamily: FONT, colors: '#64748B', fontWeight: 500 },
+          rotate: !horizontal && nCat > 6 ? -40 : 0,
+          rotateAlways: !horizontal && nCat > 10,
+          hideOverlappingLabels: true,
+          trim: true,
+        },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+        title: { text: undefined },
+      },
+      yaxis: {
+        labels: {
+          style: { fontSize: '11px', fontFamily: FONT, colors: '#64748B' },
+          formatter: (val) => toFaNumber(val),
+          maxWidth: horizontal ? 120 : 60,
+        },
+      },
+      tooltip: {
+        ...TOOLTIP,
+        y: {
+          formatter: (val) =>
+            val == null ? 'بدون داده' : `${toFaFull(val)}${unit_label ? ` ${unit_label}` : ''}`,
+        },
+      },
+      legend: singleSeries
+        ? { show: false }
+        : {
+            ...LEGEND,
+            position: 'top',
+          },
+      states: {
+        hover: { filter: { type: 'darken', value: 0.88 } },
+        active: { filter: { type: 'darken', value: 0.82 } },
+      },
+      noData: { text: 'داده‌ای موجود نیست', style: { fontFamily: FONT, color: '#94A3B8' } },
+    };
+
+    return (
+      <ChartShell
+        title={title}
+        subtitle={subtitle}
+        note={cappedNote}
+        footnote={
+          horizontal
+            ? 'نام شعب روی محور عمودی — برای جزئیات روی میله‌ها نگه دارید.'
+            : mode === 'grouped'
+              ? 'میله‌های کنارهم: مقایسه دوره‌ها برای هر واحد.'
+              : 'برای بزرگ‌نمایی، ناحیه را انتخاب کنید.'
+        }
+      >
+        <div className="w-full" style={{ height: chartHeight }}>
+          <Chart options={options} series={apexSeries} type="bar" height="100%" width="100%" />
+        </div>
+      </ChartShell>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // LINE / AREA (time series)
+  // ═══════════════════════════════════════════════════════════════════════
+  const labelSet = new Set();
+  series.forEach((s) => s.buckets?.forEach((b) => labelSet.add(b.label)));
+  const labels = Array.from(labelSet).sort();
+
+  const rankedSeries = [...series].sort((a, b) => {
+    const lastOf = (s) => {
+      for (let i = (s.buckets?.length || 0) - 1; i >= 0; i--) {
+        if (s.buckets[i]?.value != null) return Math.abs(s.buckets[i].value);
+      }
+      return 0;
+    };
+    return lastOf(b) - lastOf(a);
+  });
+
+  const seriesTrimmed = rankedSeries.length > MAX_SERIES;
+  const visibleSeries = seriesTrimmed ? rankedSeries.slice(0, MAX_SERIES) : rankedSeries;
+
+  const finalCategories = labels.map((label) => formatTimeLabel(label, bucket_unit));
+  const finalSeries = visibleSeries.map((s) => ({
+    name: truncateLabel(s.entity_name, 20),
+    data: labels.map((label) => {
+      const bucket = s.buckets?.find((b) => b.label === label);
+      return bucket?.value != null ? bucket.value / scale : null;
+    }),
+  }));
+
+  const hasData = finalSeries.some((s) => s.data.some((v) => v != null));
+  if (!hasData) {
+    return (
+      <ChartShell title={title} subtitle={subtitle}>
+        <EmptyState message="برای این بازه زمانی داده‌ای ثبت نشده است." />
+      </ChartShell>
+    );
+  }
+
+  const isSinglePoint = labels.length <= 1;
+  const singleSeries = finalSeries.length === 1;
+  const apexType = singleSeries ? 'area' : 'line';
+
+  const lineOptions = {
+    chart: {
+      ...BASE_CHART,
+      type: apexType,
+    },
+    colors: singleSeries ? [PALETTE[0]] : PALETTE,
+    stroke: {
+      width: singleSeries ? 3 : 2.5,
+      curve: 'smooth',
+      lineCap: 'round',
+      colors: singleSeries ? [PALETTE[0]] : undefined,
+    },
+    fill: singleSeries
+      ? {
+          type: 'gradient',
+          gradient: {
+            shade: 'light',
+            type: 'vertical',
+            shadeIntensity: 0.25,
+            opacityFrom: 0.4,
+            opacityTo: 0.05,
+            stops: [0, 85, 100],
+            colorStops: [
+              { offset: 0, color: PALETTE[0], opacity: 0.42 },
+              { offset: 100, color: PALETTE[0], opacity: 0.04 },
+            ],
+          },
+        }
+      : { type: 'solid', opacity: 0 },
+    markers: {
+      size: isSinglePoint ? 6 : labels.length > 28 ? 0 : labels.length > 16 ? 3 : 4,
+      colors: singleSeries ? [PALETTE[0]] : PALETTE,
+      strokeColors: '#fff',
+      strokeWidth: 2,
+      hover: { size: 7, sizeOffset: 2 },
+      discrete: [],
+    },
+    dataLabels: { enabled: false },
+    grid: GRID,
+    xaxis: {
+      categories: finalCategories,
+      labels: {
+        style: { fontSize: '11px', fontFamily: FONT, colors: '#64748B', fontWeight: 500 },
+        rotate: finalCategories.length > 10 ? -35 : 0,
+        hideOverlappingLabels: true,
+        trim: true,
+      },
+      axisBorder: { show: false },
+      axisTicks: { show: false },
+      tooltip: { enabled: false },
+      crosshairs: {
+        show: true,
+        stroke: { color: '#CBD5E1', width: 1, dashArray: 4 },
+      },
+    },
+    yaxis: {
+      labels: {
+        style: { fontSize: '11px', fontFamily: FONT, colors: '#64748B' },
+        formatter: (val) => toFaNumber(val),
+      },
+    },
+    tooltip: {
+      ...TOOLTIP,
+      shared: true,
+      intersect: false,
+      x: { show: true },
+      y: {
+        formatter: (val) =>
+          val == null ? 'بدون داده' : `${toFaFull(val)}${unit_label ? ` ${unit_label}` : ''}`,
+      },
+    },
+    legend: singleSeries
+      ? { show: false }
+      : {
+          ...LEGEND,
+          ...(finalSeries.length > 6 ? { height: 56 } : {}),
+        },
+    connectNulls: false,
+    noData: { text: 'داده‌ای موجود نیست', style: { fontFamily: FONT, color: '#94A3B8' } },
+  };
+
+  const note = [
+    seriesTrimmed
+      ? `نمایش ${MAX_SERIES} روند برتر از ${rankedSeries.length} مورد`
+      : null,
+    isSinglePoint
+      ? 'این بازه فقط یک نقطه دارد — برای روند، بازه بزرگ‌تری انتخاب کنید.'
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <ChartShell
+      title={title}
+      subtitle={subtitle}
+      note={note || null}
+      footnote="برای زوم، روی نمودار بکشید — دوبار کلیک برای بازگشت. دانلود از نوار ابزار بالا."
+    >
+      <div className="w-full" style={{ height: chartHeight }}>
+        <Chart
+          options={lineOptions}
+          series={finalSeries}
+          type={apexType}
+          height="100%"
+          width="100%"
+        />
+      </div>
+    </ChartShell>
+  );
+}

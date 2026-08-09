@@ -12,12 +12,15 @@
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {
+    "apexcharts": "^6.7.0",
     "axios": "^1.16.1",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
+    "react-apexcharts": "^2.1.1",
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.16.0",
+    "recharts": "^3.10.1",
     "remark-gfm": "^4.0.1",
     "socket.io-client": "^4.2.0"
   },
