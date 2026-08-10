@@ -28,6 +28,7 @@ export default function ChatPanel() {
   const [conversationId, setConversationId] = useState(null);
   const [exportingId, setExportingId] = useState(null);
   const [chartingId, setChartingId] = useState(null);
+  const [confirmingRowCapId, setConfirmingRowCapId] = useState(null);
 
   const [nextCursor, setNextCursor] = useState(null);
   const [hasMore, setHasMore] = useState(false);
@@ -226,11 +227,11 @@ export default function ChatPanel() {
     [conversationId]
   );
 
-  /** Chart request — product allows only bar | line. 💡 CHANGED — now
-   * forwards clauseIndex (from Message.jsx) as cached_result_index when
-   * the message is multi-clause, so the backend's query_result_cache
-   * lookup targets the right clause's cached result instead of always
-   * defaulting to the most recent one. */
+  /** Chart request — product allows only bar | line.
+   * clauseIndex from Message.jsx is the ABSOLUTE QueryResultCache index
+   * (via clause_cache_indices). clausePosition is the 0-based clause slot
+   * used only for charts_by_clause keying on the reply path. */
+  const pendingChartClausePosRef = useRef({});
   const handleChart = useCallback(
     async (message, option) => {
       const type = String(option?.chart_type || '').toLowerCase();
@@ -244,6 +245,13 @@ export default function ChatPanel() {
         alert('شناسه گفتگو یا پیام پیدا نشد.');
         return;
       }
+      const absIdx =
+        option?.clauseIndex != null ? Number(option.clauseIndex) : undefined;
+      const clausePos =
+        option?.clausePosition != null ? Number(option.clausePosition) : absIdx;
+      if (absIdx != null && Number.isFinite(absIdx)) {
+        pendingChartClausePosRef.current[`${msgId}:${absIdx}`] = clausePos;
+      }
       setChartingId(msgId);
       socketService.emit({
         action: 'chart_request',
@@ -253,10 +261,31 @@ export default function ChatPanel() {
         chart_option_id: option?.id || null,
         entity_level: option?.entity_level || null,
         entity_value: option?.entity_value || null,
-        cached_result_index:
-          option?.clauseIndex != null ? Number(option.clauseIndex) : undefined,
+        cached_result_index: absIdx,
       });
       setTimeout(() => setChartingId(null), 12000);
+    },
+    [conversationId]
+  );
+
+  /** Volume-guard confirm — resumes pending plan without re-extract. */
+  const handleConfirmRowCap = useCallback(
+    (message) => {
+      const convId =
+        conversationId || message?.metadata?.conversation_id || null;
+      const msgId = Number(message?.metadata?.message_id ?? message?.id);
+      if (!Number.isFinite(msgId) || msgId <= 0 || !convId) {
+        alert('شناسه گفتگو یا پیام پیدا نشد.');
+        return;
+      }
+      setConfirmingRowCapId(msgId);
+      setIsTyping(true);
+      socketService.emit({
+        action: 'confirm_row_cap',
+        message_id: msgId,
+        conversation_id: Number(convId),
+      });
+      setTimeout(() => setConfirmingRowCapId(null), 15000);
     },
     [conversationId]
   );
@@ -292,6 +321,7 @@ export default function ChatPanel() {
       setIsTyping(false);
       sendingRef.current = false;
       setExportingId(null);
+      setConfirmingRowCapId(null);
       const bot = payload.data || payload;
 
       if (bot.metadata?.conversation_id) {
@@ -410,7 +440,18 @@ export default function ChatPanel() {
         d?.for_message_id ||
         d?.message_id ||
         d?.metadata?.message_id;
-      const clauseIdx = d?.cached_result_index;
+      // Backend echoes absolute cache index. Prefer the clause-position we
+      // recorded when the request was sent so charts_by_clause stays keyed
+      // by 0/1/… (matches resolved_clauses and activeKpiIndex).
+      const absIdx = d?.cached_result_index;
+      const mappedPos =
+        absIdx != null
+          ? pendingChartClausePosRef.current[`${mid}:${absIdx}`]
+          : undefined;
+      if (mappedPos != null) {
+        delete pendingChartClausePosRef.current[`${mid}:${absIdx}`];
+      }
+      const clauseIdx = mappedPos != null ? mappedPos : absIdx;
 
       if (!chartPayload) {
         console.warn('[chart] no payload in event', d);
@@ -450,7 +491,23 @@ export default function ChatPanel() {
 
           const isMulti = m.metadata?.is_multi_clause === true;
           if (isMulti && clauseIdx != null) {
-            const prevByClause = m.metadata?.charts_by_clause || {};
+            // 💡 FIX (BUG-NEW-9) — this used to write into
+            // metadata.charts_by_clause, the SAME key the backend uses
+            // for the per-clause chart-TYPE OPTION descriptors
+            // (bar_branches/line_scope/line_entity — no `series`, just
+            // button metadata). Appending real fetched chart payloads
+            // into that key produced a mixed array of option-stubs and
+            // real charts; Message.jsx's multiClauseChartEntries then
+            // rendered every entry (including the option-stubs, which
+            // have no series) as if it were a real chart, and
+            // chartsLocked went true immediately on load (before any
+            // click) because the option-stubs alone made the array
+            // non-empty. That's the "دادهای برای نمایش نمودار موجود
+            // نیست" placeholder with no chart buttons ever showing.
+            // Real fetched charts now live in their own key,
+            // chart_replies_by_clause, so charts_by_clause stays
+            // exactly what the backend intended: pure option metadata.
+            const prevByClause = m.metadata?.chart_replies_by_clause || {};
             const prevList = Array.isArray(prevByClause[clauseIdx])
               ? prevByClause[clauseIdx]
               : prevByClause[clauseIdx]
@@ -460,7 +517,7 @@ export default function ChatPanel() {
               ...m,
               metadata: {
                 ...m.metadata,
-                charts_by_clause: {
+                chart_replies_by_clause: {
                   ...prevByClause,
                   [clauseIdx]: [...prevList, stamped],
                 },
@@ -701,6 +758,7 @@ export default function ChatPanel() {
     setIsTyping(false);
     setExportingId(null);
     setChartingId(null);
+    setConfirmingRowCapId(null);
   };
 
   const handleReaction = useCallback(
@@ -756,9 +814,12 @@ export default function ChatPanel() {
             onExport={handleExport}
             onReaction={handleReaction}
             onChart={handleChart}
+            onConfirmRowCap={handleConfirmRowCap}
+            onQuickReply={sendMessage}
             conversationId={conversationId}
             exportingId={exportingId}
             chartingId={chartingId}
+            confirmingRowCapId={confirmingRowCapId}
           />
         ))}
 

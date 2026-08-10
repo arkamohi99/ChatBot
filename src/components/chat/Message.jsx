@@ -101,9 +101,12 @@ export default function Message({
   onExport,
   onReaction,
   onChart,
+  onConfirmRowCap,
+  onQuickReply,
   conversationId,
   exportingId,
   chartingId,
+  confirmingRowCapId,
 }) {
   const isMe = message.type === 'user' || message.type === 'me';
   const [downloading, setDownloading] = useState(false);
@@ -151,6 +154,33 @@ export default function Message({
   const showTempExportBtn = !isMe && hasRealId && tableAvailable && stillWithinTtl && !hasPermanentFile;
   const isExporting = exportingId === message.id || exportingId === numericId;
 
+  // Volume-guard confirmation (backend: needs_row_cap_confirmation +
+  // clarification_type=VolumeConfirmation when estimated rows > 10k).
+  const needsRowCapConfirm =
+    !isMe &&
+    hasRealId &&
+    (meta.needs_row_cap_confirmation === true ||
+      meta.clarification_type === 'VolumeConfirmation');
+  const rowCapEstimated = Number(meta.row_cap_estimated_rows) || 0;
+  const rowCapLimit = Number(meta.row_cap_limit) || 10000;
+  const isConfirmingRowCap =
+    confirmingRowCapId != null &&
+    (String(confirmingRowCapId) === String(message.id) ||
+      String(confirmingRowCapId) === String(meta.message_id));
+
+  // Suggestion chips ONLY when the user must pick (KPI disambiguation /
+  // clarification). Related-KPI follow-ups on a successful data answer stay
+  // in the narrative text — they must NOT become buttons.
+  const offeredOptions = Array.isArray(meta.offered_options)
+    ? meta.offered_options.filter((o) => o && (o.kpi_name || o.label_fa))
+    : [];
+  const showOfferedOptions =
+    !isMe &&
+    !needsRowCapConfirm &&
+    needsClarification &&
+    offeredOptions.length > 0 &&
+    typeof onQuickReply === 'function';
+
   const isMultiClause = meta.is_multi_clause === true;
   const resolvedClauses = Array.isArray(meta.resolved_clauses) ? meta.resolved_clauses : [];
   const kpiTabs = isMultiClause ? resolvedClauses.map((c) => ({ kpi_name: c.kpi_name || 'شاخص' })) : [];
@@ -159,11 +189,85 @@ export default function Message({
   const chartGroups = groupChartOptionsByType(chartOptions);
   const chartTypesPresent = ALLOWED_CHART_TYPES.filter((t) => chartGroups[t].length > 0);
 
+  // Absolute cache indices written by backend when it pushed each clause
+  // into QueryResultCache. Bare 0/1 clause positions are WRONG once the
+  // conversation already has prior turns — charts then hit the wrong
+  // entry and return "شعبه‌ای برای رسم نمودار روند مشخص نیست".
+  const clauseCacheIndices = meta.clause_cache_indices || {};
+  const resolveCacheIndex = (clauseIdx) => {
+    const mapped = clauseCacheIndices[String(clauseIdx)];
+    if (mapped != null && Number.isFinite(Number(mapped))) return Number(mapped);
+    if (
+      !isMultiClause &&
+      meta.cached_result_index != null &&
+      Number.isFinite(Number(meta.cached_result_index))
+    ) {
+      return Number(meta.cached_result_index);
+    }
+    return Number(clauseIdx) || 0;
+  };
+  // Reverse map: absolute cache index → clause position (0,1,…) so chart
+  // replies keyed by absolute index still resolve the correct KPI label.
+  const cacheIndexToClausePos = (() => {
+    const rev = {};
+    Object.entries(clauseCacheIndices).forEach(([pos, abs]) => {
+      if (abs != null) rev[String(abs)] = Number(pos);
+    });
+    return rev;
+  })();
 
-  const chartsByClause = meta.charts_by_clause || {};
+  // 💡 FIX (BUG-NEW-9) — these are two different things and must not
+  // share a source:
+  //  - chartOptionsByClause: backend-emitted, per-clause list of
+  //    available chart TYPES (bar_branches/line_scope/line_entity —
+  //    button metadata, no `series`). Drives the picker buttons below.
+  //  - chartRepliesByClause: frontend-populated (in ChatPanel's
+  //    onChartReply) ONLY after a real chart_request round-trip —
+  //    actual data with `series`. Drives what gets rendered.
+  // Previously both lived under meta.charts_by_clause, so the option
+  // stubs (present from the very first render, before any click) got
+  // rendered as if they were fetched charts — permanently-empty chart
+  // panels with no visible buttons, matching the reported screenshot.
+  const chartOptionsByClause = meta.charts_by_clause || {};
+  const chartRepliesByClause = meta.chart_replies_by_clause || {};
+
+  // Multi-clause compare: surface EVERY clause's charts together so the
+  // user never has to "pick" a KPI tab just to see the second chart.
+  // Single-clause / non-compare multi keeps the simple list path.
+  const multiClauseChartEntries = (() => {
+    if (!isMultiClause || !meta.is_comparison) return null;
+    const entries = [];
+    const keys = Object.keys(chartRepliesByClause);
+    if (!keys.length) return null;
+    keys
+      .sort((a, b) => Number(a) - Number(b))
+      .forEach((k) => {
+        const slot = chartRepliesByClause[k];
+        const list = Array.isArray(slot) ? slot : slot ? [slot] : [];
+        // k may be absolute cache index OR clause position depending on
+        // which frontend build stored the reply — resolve both ways.
+        const clausePos =
+          cacheIndexToClausePos[String(k)] != null
+            ? cacheIndexToClausePos[String(k)]
+            : Number(k);
+        const label =
+          (resolvedClauses[clausePos] && resolvedClauses[clausePos].kpi_name) ||
+          `شاخص ${Number.isFinite(clausePos) ? clausePos + 1 : k}`;
+        list.forEach((c, i) => entries.push({ chart: c, label, key: `${k}-${i}` }));
+      });
+    return entries.length ? entries : null;
+  })();
+
   const chartsList = (() => {
+    if (multiClauseChartEntries) return multiClauseChartEntries.map((e) => e.chart);
     if (isMultiClause) {
-      const slot = chartsByClause[activeKpiIndex];
+      // Prefer clause-position key; also try absolute cache index for
+      // replies stored by older ChatPanel builds.
+      const absKey = String(resolveCacheIndex(activeKpiIndex));
+      const slot =
+        chartRepliesByClause[activeKpiIndex] ??
+        chartRepliesByClause[String(activeKpiIndex)] ??
+        chartRepliesByClause[absKey];
       if (Array.isArray(slot)) return slot;
       if (slot) return [slot];
       return [];
@@ -209,9 +313,22 @@ export default function Message({
     setExpandedChartType(null);
     try {
       if (isMultiClause && meta.is_comparison) {
-        await Promise.all(resolvedClauses.map((_, idx) => onChart(message, { ...option, clauseIndex: idx })));
+        await Promise.all(
+          resolvedClauses.map((_, idx) =>
+            onChart(message, {
+              ...option,
+              clauseIndex: resolveCacheIndex(idx),
+              clausePosition: idx,
+            })
+          )
+        );
       } else {
-        await onChart(message, { ...option, clauseIndex: isMultiClause ? activeKpiIndex : undefined });
+        const pos = isMultiClause ? activeKpiIndex : 0;
+        await onChart(message, {
+          ...option,
+          clauseIndex: resolveCacheIndex(pos),
+          clausePosition: pos,
+        });
       }
       if (trailEntry) setEntityTrail((prev) => [...prev, trailEntry]);
     } finally {
@@ -228,9 +345,22 @@ export default function Message({
         setChartBusyId(fallback.id);
         try {
           if (isMultiClause && meta.is_comparison) {
-            await Promise.all(resolvedClauses.map((_, idx) => onChart(message, { ...fallback, clauseIndex: idx })));
+            await Promise.all(
+              resolvedClauses.map((_, idx) =>
+                onChart(message, {
+                  ...fallback,
+                  clauseIndex: resolveCacheIndex(idx),
+                  clausePosition: idx,
+                })
+              )
+            );
           } else {
-            await onChart(message, { ...fallback, clauseIndex: isMultiClause ? activeKpiIndex : undefined });
+            const pos = isMultiClause ? activeKpiIndex : 0;
+            await onChart(message, {
+              ...fallback,
+              clauseIndex: resolveCacheIndex(pos),
+              clausePosition: pos,
+            });
           }
         } finally {
           setChartBusyId(null);
@@ -243,10 +373,30 @@ export default function Message({
     setEntityTrail(truncated);
     setChartBusyId('line_entity');
     try {
+      const base = {
+        id: 'line_entity',
+        chart_type: 'line',
+        chart_option_id: 'line_entity',
+        entity_level: target.level,
+        entity_value: target.entity_value,
+      };
       if (isMultiClause && meta.is_comparison) {
-        await Promise.all(resolvedClauses.map((_, clauseIdx) => onChart(message, { id: 'line_entity', chart_type: 'line', chart_option_id: 'line_entity', entity_level: target.level, entity_value: target.entity_value, clauseIndex: clauseIdx })));
+        await Promise.all(
+          resolvedClauses.map((_, clauseIdx) =>
+            onChart(message, {
+              ...base,
+              clauseIndex: resolveCacheIndex(clauseIdx),
+              clausePosition: clauseIdx,
+            })
+          )
+        );
       } else {
-        await onChart(message, { id: 'line_entity', chart_type: 'line', chart_option_id: 'line_entity', entity_level: target.level, entity_value: target.entity_value, clauseIndex: isMultiClause ? activeKpiIndex : undefined });
+        const pos = isMultiClause ? activeKpiIndex : 0;
+        await onChart(message, {
+          ...base,
+          clauseIndex: resolveCacheIndex(pos),
+          clausePosition: pos,
+        });
       }
     } finally {
       setChartBusyId(null);
@@ -259,6 +409,15 @@ export default function Message({
     if (opts.length === 1) {
       handleChartOptionClick(opts[0]);
       return;
+    }
+    // Prefer aggregate city/scope trend over multi-branch overlay when both
+    // exist — avoids the "108 series of dots" chart on تهران comparisons.
+    if (ctype === 'line') {
+      const scopeOpt = opts.find((o) => o.id === 'line_scope');
+      if (scopeOpt) {
+        handleChartOptionClick(scopeOpt);
+        return;
+      }
     }
     setExpandedChartType((prev) => (prev === ctype ? null : ctype));
   };
@@ -284,7 +443,7 @@ export default function Message({
   const handleKpiTabSelect = (idx) => { setActiveKpiIndex(idx); setEntityTrail([]); };
 
   const showFeedback = !isMe && hasRealId && messageType !== 'balance' && typeof onReaction === 'function' && conversationId != null;
-  const showActions = !isMe && (showTempExportBtn || hasPermanentFile || showFeedback || showChartButtons || chartsList.length > 0 || (isMultiClause && meta.is_comparison && Object.keys(chartsByClause).length > 0));
+  const showActions = !isMe && (needsRowCapConfirm || showOfferedOptions || showTempExportBtn || hasPermanentFile || showFeedback || showChartButtons || chartsList.length > 0 || (isMultiClause && meta.is_comparison && Object.keys(chartOptionsByClause).length > 0));
 
   const renderChartArea = (fullscreen = false) => {
     if (!chartsList.length) return null;
@@ -297,7 +456,7 @@ export default function Message({
         {chartsList.map((c, i) => (
           <div
             key={c._client_id || c.option_id || `chart-${i}`}
-            className={`w-full ${fullscreen ? 'min-h-[60vh]' : 'h-[450px]'}`}
+            className={`w-full ${fullscreen ? 'min-h-[70vh]' : 'min-h-[480px] h-[520px]'}`}
           >
             <ChartBlock chart={c} meta={meta} isFullscreen={fullscreen} />
           </div>
@@ -376,7 +535,9 @@ export default function Message({
             )}
           </div>
 
-          {!isMe && isMultiClause && kpiTabs.length > 1 && (
+          {/* KPI tabs only when multi-clause is NOT a side-by-side compare
+              (compare already shows every clause's chart stacked below). */}
+          {!isMe && isMultiClause && kpiTabs.length > 1 && !meta.is_comparison && (
             <div className="mt-2.5 w-full">
               <KpiTabBar kpis={kpiTabs} activeIndex={activeKpiIndex} onSelect={handleKpiTabSelect} />
             </div>
@@ -388,7 +549,36 @@ export default function Message({
             </div>
           )}
 
-          {!isMe && chartsList.length > 0 && (
+          {!isMe && multiClauseChartEntries && multiClauseChartEntries.length > 0 && (
+            <div className="mt-4 w-full relative group flex flex-col gap-4">
+              <div className="absolute top-2 left-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => setIsFullscreen(true)}
+                  className="bg-white border border-gray-200 text-indigo-700 hover:bg-indigo-50 hover:text-indigo-900 py-2 px-3 rounded-xl shadow-sm flex items-center gap-2 text-[12px] font-bold transition-all active:scale-95"
+                  title="نمایش تمام صفحه"
+                >
+                  <ExpandIcon />
+                  <span>تمام‌صفحه</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-amber-700/90 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 text-center" dir="rtl">
+                نمودارها فقط تا رفرش صفحه در مرورگر می‌مانند — قبل از بستن، تصویر را از نوار ابزار نمودار ذخیره کنید.
+              </p>
+              {multiClauseChartEntries.map((entry) => (
+                <div key={entry.key} className="w-full">
+                  <p className="text-[12px] font-bold text-indigo-800 mb-1.5 text-right px-1" dir="rtl">
+                    {entry.label}
+                  </p>
+                  {/* min-h not fixed h — fixed 450px was clipping rotated x-axis labels */}
+                  <div className="w-full min-h-[480px] h-[520px]">
+                    <ChartBlock chart={entry.chart} meta={meta} isFullscreen={false} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!isMe && !multiClauseChartEntries && chartsList.length > 0 && (
             <div className="mt-4 w-full relative group">
               <div className="absolute top-4 left-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -406,6 +596,62 @@ export default function Message({
 
           {showActions && (
             <div className="mt-3.5 flex flex-col items-center gap-2 w-full max-w-[320px]" dir="rtl">
+              {needsRowCapConfirm && typeof onConfirmRowCap === 'function' && (
+                <div className="w-full flex flex-col gap-2">
+                  <p className="text-[11px] text-center text-amber-800/90 leading-relaxed px-1 bg-amber-50 border border-amber-100 rounded-xl py-2">
+                    حجم داده حدود{' '}
+                    <strong>{(rowCapEstimated || 0).toLocaleString('fa-IR')}</strong>{' '}
+                    ردیف است (سقف {(rowCapLimit || 10000).toLocaleString('fa-IR')}).
+                    با تأیید، {(rowCapLimit || 10000).toLocaleString('fa-IR')} ردیف نخست نمایش داده می‌شود.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (isConfirmingRowCap) return;
+                      onConfirmRowCap(message);
+                    }}
+                    disabled={isConfirmingRowCap}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 px-5 rounded-2xl text-[13px] font-semibold text-white bg-indigo-700 border border-indigo-800 shadow-sm hover:bg-indigo-800 active:scale-[0.98] disabled:opacity-55 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isConfirmingRowCap ? (
+                      <>
+                        <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>در حال آماده‌سازی گزارش…</span>
+                      </>
+                    ) : (
+                      <span>
+                        بله، {(rowCapLimit || 10000).toLocaleString('fa-IR')} ردیف نخست را نشان بده
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {showOfferedOptions && (
+                <div className="w-full flex flex-col gap-1.5">
+                  <p className="text-[11px] text-center text-indigo-500/90">می‌توانید یکی از این‌ها را انتخاب کنید:</p>
+                  {offeredOptions.map((opt, i) => {
+                    const label = opt.kpi_name || opt.label_fa || `گزینه ${opt.index || i + 1}`;
+                    return (
+                      <button
+                        key={`opt-${opt.index || i}-${label}`}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onQuickReply(label);
+                        }}
+                        className="w-full text-right py-2 px-3 rounded-xl text-[11.5px] text-indigo-800 bg-indigo-50/70 border border-indigo-100 hover:bg-indigo-100 hover:border-indigo-200 active:scale-[0.98] transition-all"
+                      >
+                        {opt.index != null ? `${opt.index}. ${label}` : label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {chartsLocked && (
                 <p className="w-full text-center text-[11px] text-indigo-500/90 py-1" dir="rtl">
                   نمودار این پیام ساخته شده — برای نمودار دیگر پیام جدیدی بپرسید.
