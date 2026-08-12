@@ -44,28 +44,28 @@ const MAX_CATEGORIES = 24;
 function formatTimeLabel(label, unit) {
   if (!label || typeof label !== 'string') return label;
   const parts = label.split(/[/\-T]/);
-  if (unit === 'month' && parts.length >= 2) {
-    const mIndex = parseInt(parts[1], 10) - 1;
-    return `${JALALI_MONTHS[mIndex] || parts[1]} ${parts[0]}`;
+  if (unit === 'month') {
+    // Full "YYYY/MM" (2 parts) or year-stripped "MM" (1 part — see
+    // chart_series_merger.strip_leading_year_from_label, which runs on
+    // every comparison chart before this label ever reaches here).
+    const yearPart = parts.length >= 2 ? parts[0] : null;
+    const mPart = parts.length >= 2 ? parts[1] : parts[0];
+    const mIndex = parseInt(mPart, 10) - 1;
+    const monthName = JALALI_MONTHS[mIndex] || mPart;
+    return yearPart ? `${monthName} ${yearPart}` : monthName;
   }
-  if (unit === 'day' && parts.length >= 3) {
-    const mIndex = parseInt(parts[1], 10) - 1;
-    return `${parseInt(parts[2], 10)} ${JALALI_MONTHS[mIndex] || parts[1]}`;
+  if (unit === 'day') {
+    // Full "YYYY/MM/DD" (3 parts) or year-stripped "MM/DD" (2 parts).
+    const mPart = parts.length >= 3 ? parts[1] : parts[0];
+    const dPart = parts.length >= 3 ? parts[2] : parts[1];
+    const mIndex = parseInt(mPart, 10) - 1;
+    return `${parseInt(dPart, 10)} ${JALALI_MONTHS[mIndex] || mPart}`;
   }
   if (unit === 'year' && parts.length >= 1) return parts[0];
   return label;
 }
 
 function toFaNumber(n) {
-  // Defensive: ApexCharts' horizontal-bar mode routes the CATEGORY
-  // string (branch/city name) through the same yaxis.labels.formatter
-  // used for numeric ticks. Without this guard, a non-numeric value fed
-  // in here fell through to `Number(n).toLocaleString('fa-IR', ...)`,
-  // which renders every branch name as "ناعدد" ("not a number") —
-  // clipped by maxWidth to look like a meaningless "عدد" on every row
-  // (see the horizontal branch-comparison bar chart bug report). If the
-  // input isn't actually numeric, hand it back unchanged instead of
-  // mangling it.
   if (typeof n !== 'number') {
     const parsed = typeof n === 'string' && n.trim() !== '' ? Number(n) : NaN;
     if (Number.isNaN(parsed)) return n ?? '—';
@@ -83,7 +83,24 @@ function toFaFull(n) {
   if (n == null || Number.isNaN(n)) return 'بدون داده';
   return Number(n).toLocaleString('fa-IR', { maximumFractionDigits: 2 });
 }
+function labelSortKey(label) {
+  if (!label || typeof label !== 'string') return [0, 0, 0];
+  const s = label.trim();
+  const sep = s.includes('/') ? '/' : s.includes('-') ? '-' : null;
+  if (!sep) return [0, 0, 0];
+  const parts = s.split('T')[0].split(sep).map((p) => parseInt(p, 10));
+  const [y, m, d] = [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+  return [y, m, d];
+}
 
+function compareLabels(a, b) {
+  const ka = labelSortKey(a);
+  const kb = labelSortKey(b);
+  for (let i = 0; i < 3; i++) {
+    if (ka[i] !== kb[i]) return ka[i] - kb[i];
+  }
+  return 0;
+}
 function truncateLabel(label, max = 16) {
   if (!label || typeof label !== 'string') return label || 'نامشخص';
   return label.length > max ? `${label.slice(0, max)}…` : label;
@@ -606,7 +623,7 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
   // ═══════════════════════════════════════════════════════════════════════
   const labelSet = new Set();
   series.forEach((s) => s.buckets?.forEach((b) => labelSet.add(b.label)));
-  const labels = Array.from(labelSet).sort();
+  const labels = Array.from(labelSet).sort(compareLabels);
 
   const rankedSeries = [...series].sort((a, b) => {
     const lastOf = (s) => {

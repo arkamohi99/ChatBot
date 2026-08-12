@@ -28,6 +28,7 @@ export default function ChatPanel() {
   const [conversationId, setConversationId] = useState(null);
   const [exportingId, setExportingId] = useState(null);
   const [chartingId, setChartingId] = useState(null);
+  const lastChartRequestIdRef = useRef(null);
   const [confirmingRowCapId, setConfirmingRowCapId] = useState(null);
 
   const [nextCursor, setNextCursor] = useState(null);
@@ -253,6 +254,7 @@ export default function ChatPanel() {
         pendingChartClausePosRef.current[`${msgId}:${absIdx}`] = clausePos;
       }
       setChartingId(msgId);
+      lastChartRequestIdRef.current = msgId;
       socketService.emit({
         action: 'chart_request',
         message_id: msgId,
@@ -262,6 +264,7 @@ export default function ChatPanel() {
         entity_level: option?.entity_level || null,
         entity_value: option?.entity_value || null,
         cached_result_index: absIdx,
+        cached_result_indices: Array.isArray(option?.clauseIndices) ? option.clauseIndices : undefined,
       });
       setTimeout(() => setChartingId(null), 12000);
     },
@@ -433,16 +436,20 @@ export default function ChatPanel() {
         ]);
         return;
       }
+      // Backend may return multi_charts: one schematic per time range.
       const chartPayload =
         d?.chart || d?.chart_payload || d?.payload || d?.metadata?.chart || null;
+      const multiList = Array.isArray(chartPayload?.charts) && chartPayload?.multi_charts
+        ? chartPayload.charts
+        : chartPayload
+          ? [chartPayload]
+          : [];
       const mid =
         d?.source_message_id ||
         d?.for_message_id ||
         d?.message_id ||
-        d?.metadata?.message_id;
-      // Backend echoes absolute cache index. Prefer the clause-position we
-      // recorded when the request was sent so charts_by_clause stays keyed
-      // by 0/1/… (matches resolved_clauses and activeKpiIndex).
+        d?.metadata?.message_id ||
+        lastChartRequestIdRef.current;
       const absIdx = d?.cached_result_index;
       const mappedPos =
         absIdx != null
@@ -453,12 +460,12 @@ export default function ChatPanel() {
       }
       const clauseIdx = mappedPos != null ? mappedPos : absIdx;
 
-      if (!chartPayload) {
+      if (!multiList.length) {
         console.warn('[chart] no payload in event', d);
         setChartingId(null);
         return;
       }
-      if (chartPayload.error) {
+      if (chartPayload?.error) {
         console.warn('[chart] payload error', chartPayload.error);
         setChartingId(null);
         setMessages((prev) => [
@@ -474,14 +481,19 @@ export default function ChatPanel() {
         return;
       }
 
-      // Tag for stable React keys without server image storage
-      const stamped = {
-        ...chartPayload,
+      if (!multiList.length) {
+        console.warn('[chart] no payload in event', d);
+        setChartingId(null);
+        return;
+      }
+
+      const stampedList = multiList.map((ch, i) => ({
+        ...ch,
         _client_id:
-          chartPayload._client_id ||
-          `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        option_id: chartPayload.option_id || d?.chart_option_id || null,
-      };
+          ch._client_id ||
+          `c-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 8)}`,
+        option_id: ch.option_id || d?.chart_option_id || null,
+      }));
 
       setChartingId(null);
       setMessages((prev) =>
@@ -519,7 +531,7 @@ export default function ChatPanel() {
                 ...m.metadata,
                 chart_replies_by_clause: {
                   ...prevByClause,
-                  [clauseIdx]: [...prevList, stamped],
+                  [clauseIdx]: [...prevList, ...stampedList],
                 },
                 charts_locked: true,
               },
@@ -531,15 +543,15 @@ export default function ChatPanel() {
             : m.metadata?.chart
               ? [m.metadata.chart]
               : [];
+          const last = stampedList[stampedList.length - 1];
 
           return {
             ...m,
             metadata: {
               ...m.metadata,
-              charts: [...prevCharts, stamped],
-              // keep last as convenience for older render paths
-              chart: stamped,
-              chart_payload: stamped,
+              charts: [...prevCharts, ...stampedList],
+              chart: last,
+              chart_payload: last,
               charts_locked: true,
             },
           };
@@ -726,7 +738,7 @@ export default function ChatPanel() {
       username: user?.username,
     };
     const newMessages = [...messages, userMsg];
-    const contextMessages = newMessages.slice(-5).map((m) => ({
+    const contextMessages = newMessages.slice(-10).map((m) => ({
       id: m.id,
       text: m.text,
       type: m.type === 'bot' ? 'bot' : 'user',

@@ -691,6 +691,7 @@ export default function Message({
                     })}
                   </div>
 
+
                   {expandedChartType && chartGroups[expandedChartType].length > 1 && (
                     <div className="w-full flex flex-col gap-1.5 pr-1 border-r-2 border-indigo-100" dir="rtl">
                       {chartGroups[expandedChartType].map((opt) =>
