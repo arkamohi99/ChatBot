@@ -168,18 +168,16 @@ export default function Message({
     (String(confirmingRowCapId) === String(message.id) ||
       String(confirmingRowCapId) === String(meta.message_id));
 
-  // Suggestion chips ONLY when the user must pick (KPI disambiguation /
-  // clarification). Related-KPI follow-ups on a successful data answer stay
-  // in the narrative text — they must NOT become buttons.
+  // Soft KPI suggestions must NOT become buttons. The narrative already lists
+  // the candidate names; the user types the exact name or an ordinal
+  // («اولی» / «دومی» / «1»). Backend still keeps offered_options in metadata
+  // so triage can resolve those ordinals — UI does not render chips.
+  // Volume-guard confirm has its own dedicated button path (needsRowCapConfirm).
+  // Related-KPI follow-ups on a successful data answer also stay prose-only.
   const offeredOptions = Array.isArray(meta.offered_options)
     ? meta.offered_options.filter((o) => o && (o.kpi_name || o.label_fa))
     : [];
-  const showOfferedOptions =
-    !isMe &&
-    !needsRowCapConfirm &&
-    needsClarification &&
-    offeredOptions.length > 0 &&
-    typeof onQuickReply === 'function';
+  const showOfferedOptions = false;
 
   const isMultiClause = meta.is_multi_clause === true;
   const resolvedClauses = Array.isArray(meta.resolved_clauses) ? meta.resolved_clauses : [];
@@ -231,9 +229,9 @@ export default function Message({
   const chartOptionsByClause = meta.charts_by_clause || {};
   const chartRepliesByClause = meta.chart_replies_by_clause || {};
 
-  // Multi-clause compare: surface EVERY clause's charts together so the
-  // user never has to "pick" a KPI tab just to see the second chart.
-  // Single-clause / non-compare multi keeps the simple list path.
+  // Multi-clause compare: surface charts together. When each clause is the
+  // SAME KPI at a different place and each chart is a single-bar snapshot,
+  // MERGE into ONE bar chart (locations on X) instead of N separate charts.
   const multiClauseChartEntries = (() => {
     if (!isMultiClause || !meta.is_comparison) return null;
     const entries = [];
@@ -244,17 +242,84 @@ export default function Message({
       .forEach((k) => {
         const slot = chartRepliesByClause[k];
         const list = Array.isArray(slot) ? slot : slot ? [slot] : [];
-        // k may be absolute cache index OR clause position depending on
-        // which frontend build stored the reply — resolve both ways.
         const clausePos =
           cacheIndexToClausePos[String(k)] != null
             ? cacheIndexToClausePos[String(k)]
             : Number(k);
+        const rc = resolvedClauses[clausePos] || {};
+        const locs = Array.isArray(rc.locations)
+          ? rc.locations
+              .map((loc) => {
+                if (!loc) return '';
+                if (typeof loc === 'string') return loc;
+                return (
+                  loc.city_name ||
+                  loc.province_name ||
+                  loc.branch_name ||
+                  loc.name ||
+                  ''
+                );
+              })
+              .filter(Boolean)
+          : [];
         const label =
-          (resolvedClauses[clausePos] && resolvedClauses[clausePos].kpi_name) ||
+          locs.join(' و ') ||
+          rc.kpi_name ||
           `شاخص ${Number.isFinite(clausePos) ? clausePos + 1 : k}`;
         list.forEach((c, i) => entries.push({ chart: c, label, key: `${k}-${i}` }));
       });
+
+    if (entries.length < 2) return entries.length ? entries : null;
+
+    // Merge single-value bar snapshots into one comparison chart.
+    const canMerge = entries.every((e) => {
+      const ch = e.chart || {};
+      if (ch.chart_type && ch.chart_type !== 'bar') return false;
+      const series = ch.series || [];
+      if (!series.length) return false;
+      // one series with at most one bucket, or N series each one bucket
+      const vals = [];
+      series.forEach((s) => {
+        const b = s.buckets || [];
+        if (b.length <= 1) {
+          const v = b[0]?.value ?? s.value;
+          if (v != null) vals.push(v);
+        }
+      });
+      return vals.length === 1 || (series.length === 1 && (series[0].buckets || []).length <= 1);
+    });
+
+    if (canMerge) {
+      const first = entries[0].chart || {};
+      const mergedSeries = entries.map((e) => {
+        const ch = e.chart || {};
+        const series = ch.series || [];
+        let value = null;
+        if (series.length === 1 && (series[0].buckets || []).length) {
+          value = series[0].buckets[0]?.value;
+        } else if (series.length) {
+          const b = series[0]?.buckets || [];
+          value = b[0]?.value;
+        }
+        return {
+          entity_name: e.label,
+          buckets: [{ label: e.label, value }],
+        };
+      });
+      const merged = {
+        ...first,
+        chart_type: 'bar',
+        series: mergedSeries,
+        title_fa:
+          first.kpi_name ||
+          meta.kpi_name ||
+          first.title_fa ||
+          'مقایسه مکان‌ها',
+        option_id: 'bar_locations_merged',
+      };
+      return [{ chart: merged, label: 'مقایسه مکان‌ها', key: 'merged-locations' }];
+    }
+
     return entries.length ? entries : null;
   })();
 

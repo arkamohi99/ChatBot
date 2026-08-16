@@ -41,6 +41,35 @@ function buildDashArray(count) {
 const MAX_SERIES = 8;
 const MAX_CATEGORIES = 24;
 
+/** Snapshot bar colors vs series average (traffic-light, banking dashboards). */
+const BAR_VS_AVG = {
+  above: '#059669', // emerald — above average
+  near: '#2563EB',  // blue — within ±10% of average
+  below: '#DC2626', // red — below average
+};
+
+/**
+ * One color per bar relative to the mean of finite values.
+ * near = within 10% of mean; above = higher; below = lower.
+ */
+function colorsVsAverage(values) {
+  const nums = (values || []).filter((v) => v != null && Number.isFinite(v));
+  if (!nums.length) return (values || []).map(() => BAR_VS_AVG.near);
+  const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+  const band = Math.abs(mean) * 0.1;
+  return (values || []).map((v) => {
+    if (v == null || !Number.isFinite(v)) return BAR_VS_AVG.near;
+    if (mean === 0) {
+      if (v > 0) return BAR_VS_AVG.above;
+      if (v < 0) return BAR_VS_AVG.below;
+      return BAR_VS_AVG.near;
+    }
+    if (v > mean + band) return BAR_VS_AVG.above;
+    if (v < mean - band) return BAR_VS_AVG.below;
+    return BAR_VS_AVG.near;
+  });
+}
+
 function formatTimeLabel(label, unit) {
   if (!label || typeof label !== 'string') return label;
   const parts = label.split(/[/\-T]/);
@@ -482,8 +511,11 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
     // onto every single bar).
     const labelDensity = singleSeries ? nCat : nCat * apexSeries.length;
     const showBarLabels = labelDensity <= 24;
-    // Horizontal bars when many categories — more readable for branch names
-    const horizontal = singleSeries && nCat >= 8;
+    // Prefer vertical bars (unit names on X, values on Y) — the layout
+    // managers expect for province/city comparisons. Only flip to
+    // horizontal when the category count is so high that rotated X
+    // labels would be unreadable (dense branch-level snapshots).
+    const horizontal = singleSeries && nCat > 40;
     // Each horizontal row needs real vertical room for a Persian branch
     // name to sit next to its bar without crowding into the next row —
     // a fixed 360px for e.g. 14 branches is exactly what produced bars
@@ -495,6 +527,11 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
         ? Math.min(620, Math.max(BASE_HEIGHT, nCat * 30 + 60))
         : BASE_HEIGHT;
 
+    // Snapshot bars: color by value vs average (green / blue / red).
+    // Grouped multi-series bars keep the series palette.
+    const snapshotValues = singleSeries ? (apexSeries[0]?.data || []) : [];
+    const barColors = singleSeries ? colorsVsAverage(snapshotValues) : PALETTE;
+
     const options = {
       chart: {
         ...BASE_CHART,
@@ -504,7 +541,7 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
       plotOptions: {
         bar: {
           horizontal,
-          borderRadius: 6,
+          borderRadius: 1, // sharp rectangles (not soft pills)
           borderRadiusApplication: 'end',
           borderRadiusWhenStacked: 'last',
           columnWidth: singleSeries ? (nCat <= 4 ? '45%' : nCat <= 8 ? '55%' : '68%') : '70%',
@@ -513,7 +550,7 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
           distributed: singleSeries, // one color per category when snapshot
         },
       },
-      colors: singleSeries ? PALETTE : PALETTE,
+      colors: barColors,
       fill: {
         type: 'solid',
         opacity: 1,
