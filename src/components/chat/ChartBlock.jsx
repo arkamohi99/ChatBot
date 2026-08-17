@@ -771,7 +771,7 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
     const maxPeak = Math.max(...peaks, 0);
     const minPeak = Math.min(...peaks.filter((p) => p > 0), maxPeak);
     const ratio = minPeak > 0 ? maxPeak / minPeak : 1;
-    if (ratio >= 8) {
+    if (ratio >= 4) {
       const kpi = chart.kpi_name || 'شاخص';
       // Pull period phrase from title if present (فصل بهار / تابستان پارسال + optional range)
       const periodFromTitle = (() => {
@@ -827,7 +827,7 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
   const strokeCurve = multiLine || anyNull || labels.length <= 4 ? 'straight' : 'smooth';
   // Scalar width is more reliable in react-apexcharts than per-series arrays
   // (array form sometimes yields markers-only with no stroke).
-  const strokeWidth = multiLine ? 3.5 : 3.5;
+  const strokeWidth = multiLine ? 4 : 3.5;
   const strokeColors = undefined; // let chart.colors drive series colors
 
   const lineOptions = {
@@ -868,7 +868,7 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
       size: isSinglePoint
         ? 7
         : multiLine
-          ? (labels.length <= 3 ? 4 : 2.5)
+          ? (labels.length <= 4 ? 3 : 2)
           : labels.length > 40
             ? 0
             : labels.length > 20

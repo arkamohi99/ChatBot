@@ -1,7 +1,23 @@
-const SOCKET_URL =
-  import.meta.env?.VITE_SOCKET_URL ||
-  import.meta.env?.VITE_WS_URL ||
-  'ws://localhost:8000/ws/chat';
+function resolveSocketUrl() {
+  const fromEnv = (
+    import.meta.env?.VITE_SOCKET_URL ||
+    import.meta.env?.VITE_WS_URL ||
+    ''
+  ).trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+
+  if (typeof window !== 'undefined' && window.location) {
+    const { port, protocol, hostname, host } = window.location;
+    if (port === '5173' || port === '5174') {
+      return `ws://${hostname}:8000/ws/chat`;
+    }
+    const wsProto = protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProto}//${host}/ws/chat`;
+  }
+  return 'ws://localhost:8000/ws/chat';
+}
+
+const SOCKET_URL = resolveSocketUrl();
 
 class SocketService {
   constructor() {
@@ -36,9 +52,7 @@ class SocketService {
         this.socket.onmessage = null;
         this.socket.onerror = null;
         this.socket.close();
-      } catch (_) {
-        /* ignore */
-      }
+      } catch (_) {}
       this.socket = null;
     }
 
@@ -59,12 +73,8 @@ class SocketService {
     this.socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        // Fire EACH event name exactly once (do not double-fire bot_reply)
-        if (data.event) {
-          this._trigger(data.event, data);
-        } else {
-          this._trigger('message', data);
-        }
+        if (data.event) this._trigger(data.event, data);
+        else this._trigger('message', data);
       } catch (err) {
         console.error('[WebSocket] JSON parse error:', err);
       }
@@ -74,11 +84,8 @@ class SocketService {
       console.log(`[WebSocket] Closed (code ${event.code})`);
       this._trigger('disconnect');
       this.socket = null;
-
       if (this.shouldReconnect && this.token) {
-        this.reconnectTimer = setTimeout(() => {
-          this.connect(this.token);
-        }, 3000);
+        this.reconnectTimer = setTimeout(() => this.connect(this.token), 3000);
       }
     };
 
@@ -100,26 +107,20 @@ class SocketService {
       try {
         this.socket.onclose = null;
         this.socket.close();
-      } catch (_) {
-        /* ignore */
-      }
+      } catch (_) {}
       this.socket = null;
     }
   }
 
-  /** Preferred send API */
   send(payload) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       console.warn('[WebSocket] Cannot send — not connected');
       return false;
     }
-    this.socket.send(
-      typeof payload === 'string' ? payload : JSON.stringify(payload)
-    );
+    this.socket.send(typeof payload === 'string' ? payload : JSON.stringify(payload));
     return true;
   }
 
-  /** Alias used by some ChatPanel versions */
   emit(payload) {
     return this.send(payload);
   }
