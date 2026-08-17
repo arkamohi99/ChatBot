@@ -115,11 +115,25 @@ function toFaFull(n) {
 function labelSortKey(label) {
   if (!label || typeof label !== 'string') return [0, 0, 0];
   const s = label.trim();
+  // After merge_period_payloads year-strip, month labels become "01"/"02"
+  // (no separator). Bare 1–2 digit → month so sort stays chronological.
+  if (/^\d{1,2}$/.test(s)) {
+    const m = parseInt(s, 10);
+    return [0, Number.isFinite(m) ? m : 0, 0];
+  }
+  // Year-stripped day: "MM/DD" or "MM-DD"
+  if (/^\d{1,2}[/-]\d{1,2}$/.test(s)) {
+    const parts = s.split(/[/-]/).map((p) => parseInt(p, 10));
+    return [0, parts[0] || 0, parts[1] || 0];
+  }
   const sep = s.includes('/') ? '/' : s.includes('-') ? '-' : null;
   if (!sep) return [0, 0, 0];
   const parts = s.split('T')[0].split(sep).map((p) => parseInt(p, 10));
-  const [y, m, d] = [parts[0] || 0, parts[1] || 0, parts[2] || 0];
-  return [y, m, d];
+  // Full "YYYY/MM[/DD]" when first segment looks like a year
+  if (parts.length >= 2 && parts[0] > 31) {
+    return [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+  }
+  return [0, parts[0] || 0, parts[1] || 0];
 }
 
 function compareLabels(a, b) {
@@ -466,6 +480,32 @@ function normalizeBarData(series, scale, kpiName) {
 }
 
 export default function ChartBlock({ chart, meta, isFullscreen = false }) {
+  // 💡 FIX — backend sequential periods return
+  //   { multi_charts: true, charts: [ period0, period1, ... ] }
+  // without a top-level chart_type. Old ChartBlock bailed with `return null`
+  // so the UI looked unchanged even when the WS payload was already correct.
+  // Render each child chart stacked. Also accept a bare charts[] array.
+  if (chart && !chart.chart_type) {
+    const nested =
+      (Array.isArray(chart.charts) && chart.charts.length && chart.charts) ||
+      (Array.isArray(chart) && chart.length && chart) ||
+      null;
+    if (nested) {
+      return (
+        <div className="w-full flex flex-col gap-5">
+          {nested.filter(Boolean).map((ch, i) => (
+            <ChartBlock
+              key={ch._client_id || ch.option_id || `mc-${i}`}
+              chart={{ ...ch, _compact: nested.length > 1 ? true : ch._compact }}
+              meta={meta}
+              isFullscreen={isFullscreen}
+            />
+          ))}
+        </div>
+      );
+    }
+  }
+
   if (!chart || !chart.chart_type) return null;
 
   const {
@@ -481,7 +521,8 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
   const title = title_fa || kpi_name || '';
   const subtitle = unit_label ? `واحد: ${unit_label}` : '';
   const stats = computeChartStats(chart);
-  const BASE_HEIGHT = 420;
+  // Compact height when this is a scale-split location chart (many stacked).
+  const BASE_HEIGHT = chart._compact ? 320 : 380;
 
   // ═══════════════════════════════════════════════════════════════════════
   // BAR
@@ -658,14 +699,27 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
   // ═══════════════════════════════════════════════════════════════════════
   // LINE / AREA (time series)
   // ═══════════════════════════════════════════════════════════════════════
+  const normLabel = (lab) => (lab == null ? '' : String(lab).trim().replace(/-/g, '/'));
+  const bucketVal = (b) => {
+    if (b == null) return null;
+    const v = typeof b === 'number' ? b : b.value;
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
   const labelSet = new Set();
-  series.forEach((s) => s.buckets?.forEach((b) => labelSet.add(b.label)));
+  series.forEach((s) => s.buckets?.forEach((b) => {
+    const lab = normLabel(b?.label);
+    if (lab) labelSet.add(lab);
+  }));
   const labels = Array.from(labelSet).sort(compareLabels);
 
   const rankedSeries = [...series].sort((a, b) => {
     const lastOf = (s) => {
       for (let i = (s.buckets?.length || 0) - 1; i >= 0; i--) {
-        if (s.buckets[i]?.value != null) return Math.abs(s.buckets[i].value);
+        const v = bucketVal(s.buckets[i]);
+        if (v != null) return Math.abs(v);
       }
       return 0;
     };
@@ -676,13 +730,26 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
   const visibleSeries = seriesTrimmed ? rankedSeries.slice(0, MAX_SERIES) : rankedSeries;
 
   const finalCategories = labels.map((label) => formatTimeLabel(label, bucket_unit));
-  const finalSeries = visibleSeries.map((s) => ({
-    name: truncateLabel(s.entity_name, 20),
-    data: labels.map((label) => {
-      const bucket = s.buckets?.find((b) => b.label === label);
-      return bucket?.value != null ? bucket.value / scale : null;
-    }),
-  }));
+  // Build dense aligned series: same length as categories, null where missing.
+  // Backend also aligns now; this is a safety net so multi-period / multi-location
+  // never falls back to jagged lengths that Apex draws as isolated markers only.
+  const finalSeries = visibleSeries.map((s) => {
+    const byLabel = new Map();
+    (s.buckets || []).forEach((b) => {
+      const lab = normLabel(b?.label);
+      if (!lab) return;
+      if (!byLabel.has(lab) || byLabel.get(lab) == null) {
+        byLabel.set(lab, bucketVal(b));
+      }
+    });
+    return {
+      name: truncateLabel(s.entity_name, 20),
+      data: labels.map((label) => {
+        const v = byLabel.get(normLabel(label));
+        return v != null ? v / scale : null;
+      }),
+    };
+  });
 
   const hasData = finalSeries.some((s) => s.data.some((v) => v != null));
   if (!hasData) {
@@ -693,39 +760,89 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
     );
   }
 
+  // 💡 Multi-location scale gap (اصفهان ~30× یزد): one shared Y-axis makes
+  // the smaller series look like dots on the floor. Split into one chart
+  // per location with a clean short title (not the full parent title).
+  if (finalSeries.length >= 2) {
+    const peaks = finalSeries.map((s) => {
+      const vals = (s.data || []).filter((v) => v != null && Number.isFinite(v)).map((v) => Math.abs(v));
+      return vals.length ? Math.max(...vals) : 0;
+    });
+    const maxPeak = Math.max(...peaks, 0);
+    const minPeak = Math.min(...peaks.filter((p) => p > 0), maxPeak);
+    const ratio = minPeak > 0 ? maxPeak / minPeak : 1;
+    if (ratio >= 8) {
+      const kpi = chart.kpi_name || 'شاخص';
+      // Pull period phrase from title if present (فصل بهار / تابستان پارسال + optional range)
+      const periodFromTitle = (() => {
+        const t = String(chart.title_fa || '');
+        const m = t.match(
+          /((?:فصل\s+)?(?:بهار|تابستان|پاییز|زمستان)(?:\s+پارسال|\s+امسال)?(?:\s*\([^)]*\))?)/
+        );
+        return m ? m[1].trim() : '';
+      })();
+      return (
+        <div className="w-full flex flex-col gap-5">
+          {visibleSeries.map((s, i) => {
+            const loc = s.entity_name || `سری ${i + 1}`;
+            const shortTitle = [kpi, periodFromTitle, loc].filter(Boolean).join(' — ');
+            return (
+              <ChartBlock
+                key={loc}
+                chart={{
+                  ...chart,
+                  series: [s],
+                  title_fa: shortTitle,
+                  is_comparison: false,
+                  _compact: true,
+                }}
+                meta={meta}
+                isFullscreen={isFullscreen}
+              />
+            );
+          })}
+        </div>
+      );
+    }
+  }
+
   const isSinglePoint = labels.length <= 1;
   const singleSeries = finalSeries.length === 1;
+  // Prefer area for single series (filled trend). Multi always line.
+  // Force 'line' (not scatter) so stroke is always drawn.
   const apexType = singleSeries ? 'area' : 'line';
-  // A crowded multi-series legend wraps to 2-3 rows — give it room instead
-  // of squeezing the plot area, another contributor to the "can't tell
-  // lines apart" complaint (legend chips overlapping/clipping at 360px).
   const chartHeight = isFullscreen
     ? '100%'
     : !singleSeries && finalSeries.length > 5
       ? BASE_HEIGHT + 40
       : BASE_HEIGHT;
   const useDashPattern = !singleSeries && finalSeries.length > 4;
-  // Same "print the number, don't hide it behind a hover" fix as the bar
-  // chart, scoped to the case it actually helps: one trend line with few
-  // enough points that labels won't collide (multi-series is left to the
-  // shared tooltip — labelling every series at every point is unreadable
-  // no matter the font).
   const showLineLabels = singleSeries && labels.length <= 10;
+
+  // Multi-period sequential (بهار+تابستان) arrives as shared x-axis with
+  // nulls on opposite sides. Apex "smooth" + nulls often draws markers
+  // only (scattered dots). Force straight stroke + thicker width.
+  const anyNull = finalSeries.some((s) => (s.data || []).some((v) => v == null));
+  const multiLine = !singleSeries;
+  const strokeCurve = multiLine || anyNull || labels.length <= 4 ? 'straight' : 'smooth';
+  // Scalar width is more reliable in react-apexcharts than per-series arrays
+  // (array form sometimes yields markers-only with no stroke).
+  const strokeWidth = multiLine ? 3.5 : 3.5;
+  const strokeColors = undefined; // let chart.colors drive series colors
 
   const lineOptions = {
     chart: {
       ...BASE_CHART,
       type: apexType,
+      animations: { enabled: true, speed: 400 },
     },
     colors: singleSeries ? [PALETTE[0]] : PALETTE,
     stroke: {
-      width: singleSeries ? 3.5 : labels.length <= 4 ? 3 : 2.5,
-      curve: labels.length <= 3 ? 'straight' : 'smooth',
+      width: strokeWidth,
+      curve: strokeCurve,
       lineCap: 'round',
-      colors: singleSeries ? [PALETTE[0]] : undefined,
-      // Solid/dashed/dotted rotation as a second differentiation channel
-      // beyond color once there are enough series that two lines can end
-      // up close in both hue and value — exactly what image 2 showed.
+      show: true,
+      // do not set stroke.colors — use chart.colors so Apex always paints lines
       dashArray: useDashPattern ? buildDashArray(finalSeries.length) : 0,
     },
     fill: singleSeries
@@ -746,14 +863,22 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
         }
       : { type: 'solid', opacity: 0 },
     markers: {
-      // Keep points visible — size 0 on dense charts hid the whole series
-      // when only a few buckets existed (Tehran compare looked like 2 dots).
-      size: isSinglePoint ? 7 : labels.length > 40 ? 0 : labels.length > 20 ? 3 : labels.length <= 4 ? 6 : 4,
+      // Prefer the stroke: small markers so continuous lines read as lines
+      // not as a scatter plot of dots (the multi-location screenshot bug).
+      size: isSinglePoint
+        ? 7
+        : multiLine
+          ? (labels.length <= 3 ? 4 : 2.5)
+          : labels.length > 40
+            ? 0
+            : labels.length > 20
+              ? 2.5
+              : labels.length <= 4
+                ? 5
+                : 3.5,
       colors: singleSeries ? [PALETTE[0]] : PALETTE,
       strokeColors: '#fff',
-      strokeWidth: 2,
-      // Bigger hover bump when many series overlap at the same x — makes
-      // it obvious which point the tooltip/crosshair is currently on.
+      strokeWidth: multiLine ? 1.5 : 2,
       hover: { size: useDashPattern ? 8 : 7, sizeOffset: 2 },
       discrete: [],
     },
@@ -817,7 +942,16 @@ export default function ChartBlock({ chart, meta, isFullscreen = false }) {
           ...LEGEND,
           ...(finalSeries.length > 5 ? { height: 56 } : {}),
         },
-    connectNulls: false,
+    // 💡 FIX — backend buckets a balance-style KPI ("مانده") per calendar
+    // day, but the underlying DB only has a row on days something actually
+    // changed. Every other day comes back as `null`. With connectNulls
+    // false, Apex breaks the line at every null and only draws isolated
+    // markers for the sparse real points — exactly the "scattered dots,
+    // no line" report. The backend now forward-fills those gaps for
+    // LAST_DAY-rule KPIs (see chart_data_service.py), so nulls here should
+    // only remain before the first-ever recorded value — connect through
+    // them too instead of fragmenting the line.
+    connectNulls: true,
     noData: { text: 'داده‌ای موجود نیست', style: { fontFamily: FONT, color: '#94A3B8' } },
   };
 

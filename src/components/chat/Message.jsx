@@ -233,7 +233,17 @@ export default function Message({
   // SAME KPI at a different place and each chart is a single-bar snapshot,
   // MERGE into ONE bar chart (locations on X) instead of N separate charts.
   const multiClauseChartEntries = (() => {
-    if (!isMultiClause || !meta.is_comparison) return null;
+    // 💡 FIX (BUG-NEW-38, missed spot) — this gate still only checked
+    // meta.is_comparison, while the other two call sites further down
+    // (lines ~380/418) were already updated to also merge whenever the
+    // backend pushed more than one clause into QueryResultCache
+    // (clauseCacheIndices has >1 entry), regardless of whether the LLM
+    // happened to set is_comparison on the clauses. Left stale, a
+    // multi-location query where triage didn't mark is_comparison=true
+    // rendered N separate un-merged single-bar charts instead of one
+    // comparison chart.
+    const multiIdx = Object.keys(clauseCacheIndices).length > 1;
+    if (!isMultiClause || !(meta.is_comparison || multiIdx)) return null;
     const entries = [];
     const keys = Object.keys(chartRepliesByClause);
     if (!keys.length) return null;
@@ -324,22 +334,137 @@ export default function Message({
   })();
 
   const chartsList = (() => {
-    if (multiClauseChartEntries) return multiClauseChartEntries.map((e) => e.chart);
-    if (isMultiClause) {
-      // Prefer clause-position key; also try absolute cache index for
-      // replies stored by older ChatPanel builds.
+    // Normalize any chart-shaped object that may wrap multi_charts.
+    const unwrap = (obj) => {
+      if (!obj) return [];
+      if (Array.isArray(obj)) {
+        return obj.flatMap((x) => unwrap(x));
+      }
+      if (obj.multi_charts && Array.isArray(obj.charts)) {
+        return obj.charts.filter(Boolean);
+      }
+      if (Array.isArray(obj.charts) && obj.charts.length && !obj.series) {
+        return obj.charts.filter(Boolean);
+      }
+      if (Array.isArray(obj.series) || obj.chart_type) {
+        return [obj];
+      }
+      return [];
+    };
+
+    /**
+     * 💡 Sequential multi-period safety net (بهار + تابستان):
+     * Backend should return multi_charts (one continuous chart per period).
+     * Older merges put 2 series on one axis with opposite nulls → Apex draws
+     * scattered dots. Detect that shape and split into one chart per series
+     * so each period gets a continuous line with its own time range.
+     * Do NOT split real multi-location overlays (both series mostly filled).
+     */
+    const splitComplementaryNullSeries = (list) => {
+      const out = [];
+      for (const ch of list) {
+        if (!ch || ch.chart_type !== 'line') {
+          out.push(ch);
+          continue;
+        }
+        const series = Array.isArray(ch.series) ? ch.series : [];
+        if (series.length < 2) {
+          out.push(ch);
+          continue;
+        }
+        // Build per-series non-null mask over the shared label union
+        const labelSet = [];
+        const seen = new Set();
+        series.forEach((s) => {
+          (s.buckets || []).forEach((b) => {
+            const lab = b && b.label != null ? String(b.label).trim() : '';
+            if (lab && !seen.has(lab)) {
+              seen.add(lab);
+              labelSet.push(lab);
+            }
+          });
+        });
+        if (labelSet.length < 2) {
+          out.push(ch);
+          continue;
+        }
+        const masks = series.map((s) => {
+          const byLab = new Map();
+          (s.buckets || []).forEach((b) => {
+            const lab = b && b.label != null ? String(b.label).trim() : '';
+            if (!lab) return;
+            const v = b.value;
+            byLab.set(lab, v != null && v !== '' && Number.isFinite(Number(v)));
+          });
+          return labelSet.map((lab) => byLab.get(lab) === true);
+        });
+        // Complementary = for most labels, exactly one series is non-null
+        let complementarySlots = 0;
+        let bothFilled = 0;
+        for (let i = 0; i < labelSet.length; i++) {
+          const filled = masks.reduce((n, m) => n + (m[i] ? 1 : 0), 0);
+          if (filled === 1) complementarySlots += 1;
+          if (filled >= 2) bothFilled += 1;
+        }
+        const mostlyComplementary =
+          complementarySlots >= Math.ceil(labelSet.length * 0.6) && bothFilled <= Math.floor(labelSet.length * 0.2);
+        if (!mostlyComplementary) {
+          out.push(ch);
+          continue;
+        }
+        // Split: one chart per series, drop pure-null buckets so the axis
+        // is only that period's real range (not padded with opposite nulls).
+        series.forEach((s, idx) => {
+          const buckets = (s.buckets || []).filter((b) => {
+            const v = b && b.value;
+            return v != null && v !== '' && Number.isFinite(Number(v));
+          });
+          if (!buckets.length) return;
+          out.push({
+            ...ch,
+            series: [{ ...s, buckets }],
+            is_comparison: false,
+            title_fa:
+              (s.entity_name ? `${ch.kpi_name || ch.title_fa || 'شاخص'} — ${s.entity_name}` : ch.title_fa) ||
+              ch.kpi_name ||
+              `دوره ${idx + 1}`,
+            option_id: ch.option_id ? `${ch.option_id}_split_${idx}` : `line_split_${idx}`,
+            _client_id: `split-${idx}-${s.entity_name || idx}`,
+          });
+        });
+      }
+      return out;
+    };
+
+    // 💡 FIX — line_all_clauses / sequential multi-period returns ONE payload:
+    // { multi_charts: true, charts: [period0, period1, ...] }.
+    // ChatPanel stores that on metadata.chart / chart_payload.
+    // Previously multi-clause messages ONLY read chart_replies_by_clause, so
+    // multi_charts on chart_payload was ignored → empty chartsList while the
+    // server log already showed correct dense series (اصفهان+یزد × بهار, then
+    // تابستان). Prefer the unified chart_payload whenever it has real series.
+    const fromPayload = (() => {
+      const one = meta.chart || meta.chart_payload || message.chart || null;
+      const unwrapped = unwrap(one);
+      if (unwrapped.length) return unwrapped;
+      if (Array.isArray(meta.charts) && meta.charts.length) return unwrap(meta.charts);
+      return [];
+    })();
+
+    let list = [];
+    if (fromPayload.length) {
+      list = fromPayload;
+    } else if (multiClauseChartEntries) {
+      list = multiClauseChartEntries.flatMap((e) => unwrap(e.chart));
+    } else if (isMultiClause) {
       const absKey = String(resolveCacheIndex(activeKpiIndex));
       const slot =
         chartRepliesByClause[activeKpiIndex] ??
         chartRepliesByClause[String(activeKpiIndex)] ??
         chartRepliesByClause[absKey];
-      if (Array.isArray(slot)) return slot;
-      if (slot) return [slot];
-      return [];
+      list = slot ? unwrap(slot) : [];
     }
-    if (Array.isArray(meta.charts) && meta.charts.length) return meta.charts;
-    const one = meta.chart || meta.chart_payload || message.chart || null;
-    return one ? [one] : [];
+    return splitComplementaryNullSeries(list);
   })();
   const chartPayload = chartsList.length ? chartsList[chartsList.length - 1] : null;
   const chartsLocked = meta.charts_locked === true || chartsList.length > 0;
@@ -377,16 +502,22 @@ export default function Message({
     setChartBusyId(option.id);
     setExpandedChartType(null);
     try {
-      if (isMultiClause && meta.is_comparison) {
-        await Promise.all(
-          resolvedClauses.map((_, idx) =>
-            onChart(message, {
-              ...option,
-              clauseIndex: resolveCacheIndex(idx),
-              clausePosition: idx,
-            })
-          )
-        );
+      const multiIdx = Object.keys(clauseCacheIndices).length > 1;
+    if (isMultiClause && (meta.is_comparison || multiIdx)) {
+        // ONE request for all locations (not N charts). Backend merges via
+        // bar_all_clauses / line_all_clauses + cached_result_indices.
+        const allIdx = resolvedClauses.map((_, idx) => resolveCacheIndex(idx));
+        const ctype = String(option?.chart_type || option?.id || '').toLowerCase();
+        const isBar = ctype.includes('bar') || option?.id === 'bar_branches';
+        const mergedId = isBar ? 'bar_all_clauses' : 'line_all_clauses';
+        await onChart(message, {
+          ...option,
+          id: option?.id === 'line_entity' ? option.id : mergedId,
+          chart_type: isBar ? 'bar' : 'line',
+          clauseIndex: allIdx[0],
+          clausePosition: 0,
+          clauseIndices: allIdx,
+        });
       } else {
         const pos = isMultiClause ? activeKpiIndex : 0;
         await onChart(message, {
@@ -409,16 +540,17 @@ export default function Message({
       if (fallback) {
         setChartBusyId(fallback.id);
         try {
-          if (isMultiClause && meta.is_comparison) {
-            await Promise.all(
-              resolvedClauses.map((_, idx) =>
-                onChart(message, {
-                  ...fallback,
-                  clauseIndex: resolveCacheIndex(idx),
-                  clausePosition: idx,
-                })
-              )
-            );
+          const multiIdx = Object.keys(clauseCacheIndices).length > 1;
+    if (isMultiClause && (meta.is_comparison || multiIdx)) {
+            const allIdx = resolvedClauses.map((_, idx) => resolveCacheIndex(idx));
+            await onChart(message, {
+              ...fallback,
+              id: 'line_all_clauses',
+              chart_type: 'line',
+              clauseIndex: allIdx[0],
+              clausePosition: 0,
+              clauseIndices: allIdx,
+            });
           } else {
             const pos = isMultiClause ? activeKpiIndex : 0;
             await onChart(message, {
@@ -445,24 +577,14 @@ export default function Message({
         entity_level: target.level,
         entity_value: target.entity_value,
       };
-      if (isMultiClause && meta.is_comparison) {
-        await Promise.all(
-          resolvedClauses.map((_, clauseIdx) =>
-            onChart(message, {
-              ...base,
-              clauseIndex: resolveCacheIndex(clauseIdx),
-              clausePosition: clauseIdx,
-            })
-          )
-        );
-      } else {
-        const pos = isMultiClause ? activeKpiIndex : 0;
-        await onChart(message, {
-          ...base,
-          clauseIndex: resolveCacheIndex(pos),
-          clausePosition: pos,
-        });
-      }
+      // Entity drill-down stays on one clause (first); multi-location
+      // overlay is handled by line_all_clauses / bar_all_clauses above.
+      const pos = isMultiClause ? activeKpiIndex : 0;
+      await onChart(message, {
+        ...base,
+        clauseIndex: resolveCacheIndex(pos),
+        clausePosition: pos,
+      });
     } finally {
       setChartBusyId(null);
     }
@@ -513,15 +635,19 @@ export default function Message({
   const renderChartArea = (fullscreen = false) => {
     if (!chartsList.length) return null;
     return (
-      <div className={`w-full flex flex-col gap-4 ${fullscreen ? 'h-[85vh] overflow-auto' : ''}`}>
-        <p className="text-[11px] text-amber-700/90 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 text-center" dir="rtl">
+      <div
+        className={`w-full flex flex-col gap-5 ${
+          fullscreen ? 'h-[85vh] overflow-y-auto' : ''
+        }`}
+      >
+        <p className="text-[11px] text-amber-700/90 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 text-center shrink-0" dir="rtl">
           نمودارها فقط تا رفرش صفحه یا ترک گفتگو در مرورگر می‌مانند.
           قبل از بستن صفحه، از نوار ابزار نمودار (آیکون دانلود) تصویر را ذخیره کنید.
         </p>
         {chartsList.map((c, i) => (
           <div
             key={c._client_id || c.option_id || `chart-${i}`}
-            className={`w-full ${fullscreen ? 'min-h-[70vh]' : 'min-h-[480px] h-[520px]'}`}
+            className={`w-full ${fullscreen ? 'min-h-[50vh]' : ''}`}
           >
             <ChartBlock chart={c} meta={meta} isFullscreen={fullscreen} />
           </div>
@@ -614,7 +740,26 @@ export default function Message({
             </div>
           )}
 
-          {!isMe && multiClauseChartEntries && multiClauseChartEntries.length > 0 && (
+          {/* Prefer chartsList (includes unwrapped multi_charts from chart_payload /
+              line_all_clauses sequential periods). Only fall back to the older
+              per-clause multiClauseChartEntries path when chartsList is empty. */}
+          {!isMe && chartsList.length > 0 && (
+            <div className="mt-4 w-full relative group">
+              <div className="absolute top-4 left-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => setIsFullscreen(true)}
+                  className="bg-white border border-gray-200 text-indigo-700 hover:bg-indigo-50 hover:text-indigo-900 py-2 px-3 rounded-xl shadow-sm flex items-center gap-2 text-[12px] font-bold transition-all active:scale-95"
+                  title="نمایش تمام صفحه"
+                >
+                  <ExpandIcon />
+                  <span>تمام‌صفحه</span>
+                </button>
+              </div>
+              {renderChartArea(false)}
+            </div>
+          )}
+
+          {!isMe && chartsList.length === 0 && multiClauseChartEntries && multiClauseChartEntries.length > 0 && (
             <div className="mt-4 w-full relative group flex flex-col gap-4">
               <div className="absolute top-2 left-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
@@ -634,28 +779,11 @@ export default function Message({
                   <p className="text-[12px] font-bold text-indigo-800 mb-1.5 text-right px-1" dir="rtl">
                     {entry.label}
                   </p>
-                  {/* min-h not fixed h — fixed 450px was clipping rotated x-axis labels */}
-                  <div className="w-full min-h-[480px] h-[520px]">
+                  <div className="w-full">
                     <ChartBlock chart={entry.chart} meta={meta} isFullscreen={false} />
                   </div>
                 </div>
               ))}
-            </div>
-          )}
-
-          {!isMe && !multiClauseChartEntries && chartsList.length > 0 && (
-            <div className="mt-4 w-full relative group">
-              <div className="absolute top-4 left-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => setIsFullscreen(true)}
-                  className="bg-white border border-gray-200 text-indigo-700 hover:bg-indigo-50 hover:text-indigo-900 py-2 px-3 rounded-xl shadow-sm flex items-center gap-2 text-[12px] font-bold transition-all active:scale-95"
-                  title="نمایش تمام صفحه"
-                >
-                  <ExpandIcon />
-                  <span>تمام‌صفحه</span>
-                </button>
-              </div>
-              {renderChartArea(false)}
             </div>
           )}
 

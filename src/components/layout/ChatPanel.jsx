@@ -495,6 +495,26 @@ export default function ChatPanel() {
         option_id: ch.option_id || d?.chart_option_id || null,
       }));
 
+      // 💡 FIX — sequential periods (بهار + تابستان) arrive as
+      // { multi_charts: true, charts: [period0, period1] }.
+      // Old code set metadata.chart = last chart ONLY, so Message showed
+      // one period (or looked merged/broken). Keep the FULL wrapper so
+      // Message/ChartBlock can unwrap into one continuous chart per period.
+      const fullPayload =
+        chartPayload && chartPayload.multi_charts && Array.isArray(chartPayload.charts)
+          ? {
+              ...chartPayload,
+              charts: stampedList,
+            }
+          : stampedList.length > 1
+            ? {
+                multi_charts: true,
+                charts: stampedList,
+                option_id: d?.chart_option_id || stampedList[0]?.option_id || null,
+                title_fa: chartPayload?.title_fa || null,
+              }
+            : stampedList[0] || chartPayload;
+
       setChartingId(null);
       setMessages((prev) =>
         prev.map((m) => {
@@ -502,23 +522,25 @@ export default function ChatPanel() {
           if (String(id) !== String(mid)) return m;
 
           const isMulti = m.metadata?.is_multi_clause === true;
+          const prevCharts = Array.isArray(m.metadata?.charts)
+            ? m.metadata.charts
+            : m.metadata?.chart
+              ? [m.metadata.chart]
+              : [];
+
+          // Always attach fullPayload on chart + chart_payload so Message
+          // fromPayload / ChartBlock multi_charts path can see every period.
+          const baseMeta = {
+            ...m.metadata,
+            charts: [...prevCharts, ...stampedList],
+            chart: fullPayload,
+            chart_payload: fullPayload,
+            charts_locked: true,
+          };
+
           if (isMulti && clauseIdx != null) {
-            // 💡 FIX (BUG-NEW-9) — this used to write into
-            // metadata.charts_by_clause, the SAME key the backend uses
-            // for the per-clause chart-TYPE OPTION descriptors
-            // (bar_branches/line_scope/line_entity — no `series`, just
-            // button metadata). Appending real fetched chart payloads
-            // into that key produced a mixed array of option-stubs and
-            // real charts; Message.jsx's multiClauseChartEntries then
-            // rendered every entry (including the option-stubs, which
-            // have no series) as if it were a real chart, and
-            // chartsLocked went true immediately on load (before any
-            // click) because the option-stubs alone made the array
-            // non-empty. That's the "دادهای برای نمایش نمودار موجود
-            // نیست" placeholder with no chart buttons ever showing.
-            // Real fetched charts now live in their own key,
-            // chart_replies_by_clause, so charts_by_clause stays
-            // exactly what the backend intended: pure option metadata.
+            // Real fetched charts live in chart_replies_by_clause (not
+            // charts_by_clause, which is option metadata only).
             const prevByClause = m.metadata?.chart_replies_by_clause || {};
             const prevList = Array.isArray(prevByClause[clauseIdx])
               ? prevByClause[clauseIdx]
@@ -528,32 +550,18 @@ export default function ChatPanel() {
             return {
               ...m,
               metadata: {
-                ...m.metadata,
+                ...baseMeta,
                 chart_replies_by_clause: {
                   ...prevByClause,
                   [clauseIdx]: [...prevList, ...stampedList],
                 },
-                charts_locked: true,
               },
             };
           }
 
-          const prevCharts = Array.isArray(m.metadata?.charts)
-            ? m.metadata.charts
-            : m.metadata?.chart
-              ? [m.metadata.chart]
-              : [];
-          const last = stampedList[stampedList.length - 1];
-
           return {
             ...m,
-            metadata: {
-              ...m.metadata,
-              charts: [...prevCharts, ...stampedList],
-              chart: last,
-              chart_payload: last,
-              charts_locked: true,
-            },
+            metadata: baseMeta,
           };
         })
       );
